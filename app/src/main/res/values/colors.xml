@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark neon palette -->
+    <color name="bg_dark">#05070E</color>
+    <color name="bg_dark2">#0B1020</color>
+    <color name="surface">#121A2E</color>
+    <color name="surface_stroke">#22304F</color>
+
+    <color name="neon_cyan">#00E5FF</color>
+    <color name="neon_magenta">#FF3DBE</color>
+    <color name="neon_dim">#0FB8CC</color>
+
+    <color name="text_primary">#EAF3FF</color>
+    <color name="text_secondary">#8FA6C9</color>
+    <color name="text_on_neon">#04121A</color>
+
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#05070E</color>
+</resources>

@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ALFA SMS</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/qrcode.js"></script>
+<style>
+  :root{
+    --bg:#eef1f6; --card:#ffffff; --ink:#141b2d; --muted:#6b7480;
+    --line:#e4e8ef; --accent:#2f7ae5; --accent-ink:#fff;
+    --green:#34c759; --green-dark:#28a745; --danger:#e5484d; --danger-bg:#fdecec;
+    --shadow:0 1px 3px rgba(20,27,45,.08),0 1px 2px rgba(20,27,45,.05);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+    background:var(--bg); color:var(--ink); font-size:15px; line-height:1.4;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .wrap{max-width:560px;margin:0 auto;padding:16px 14px 60px}
+  h1{font-size:22px;margin:4px 0 2px;letter-spacing:.02em}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
+  .row{display:flex;align-items:center;gap:12px}
+  .row.between{justify-content:space-between}
+  .grow{flex:1;min-width:0}
+  label.field{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+  input[type=text],input[type=tel],input[type=number],input[type=time],input[type=datetime-local],textarea{
+    width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;
+    background:#fff;color:var(--ink);font-family:inherit;
+  }
+  input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{resize:vertical;min-height:44px}
+  .btn{appearance:none;border:none;border-radius:10px;padding:12px 16px;font-size:15px;font-weight:600;
+    cursor:pointer;background:var(--accent);color:var(--accent-ink);width:100%}
+  .btn:active{opacity:.85}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.sec{background:#eef2f8;color:var(--ink)}
+  .btn.ghost{background:transparent;color:var(--accent);padding:8px}
+  .btn.danger{background:var(--danger-bg);color:var(--danger)}
+  .btn.small{width:auto;padding:8px 12px;font-size:13px}
+  .chip{display:inline-block;padding:8px 0;flex:1;text-align:center;border:1px solid var(--line);
+    border-radius:9px;background:#fff;font-size:14px;cursor:pointer;font-weight:600}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .muted{color:var(--muted)}
+  .small{font-size:13px}
+  .tiny{font-size:12px}
+  .dev-name{font-size:17px;font-weight:700}
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px}
+  .badge.on{background:#e7f8ec;color:var(--green-dark)}
+  .badge.off{background:#f1f3f6;color:var(--muted)}
+  .badge.run{background:#e8f0fe;color:var(--accent)}
+  .badge.err{background:var(--danger-bg);color:var(--danger)}
+  .dot{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+
+  /* iOS-style switch */
+  .sw{position:relative;display:inline-block;width:50px;height:30px;flex:0 0 auto}
+  .sw input{opacity:0;width:0;height:0}
+  .sw .slider{position:absolute;inset:0;background:#e6e9ef;border:1px solid #d3d8e0;border-radius:30px;transition:.2s}
+  .sw .slider:before{content:"";position:absolute;height:24px;width:24px;left:3px;top:2px;background:#fff;
+    border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .sw input:checked + .slider{background:var(--green);border-color:var(--green)}
+  .sw input:checked + .slider:before{transform:translateX(20px)}
+
+  .global{background:linear-gradient(135deg,#2f7ae5,#5b8def);color:#fff;border:none}
+  .global .sw .slider{background:rgba(255,255,255,.35);border-color:rgba(255,255,255,.5)}
+  .global .sw input:checked + .slider{background:var(--green);border-color:var(--green)}
+  .global .ttl{font-size:16px;font-weight:700}
+  .global .desc{font-size:12px;opacity:.9;margin-top:2px}
+
+  .windows-list .wrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .qrbox{text-align:center;padding:10px 0}
+  .qrbox svg{width:200px;height:200px;background:#fff;border-radius:8px}
+  .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.15em;
+    background:#f1f3f6;padding:8px 12px;border-radius:8px;display:inline-block;margin:6px 0}
+  .hidden{display:none}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#141b2d;color:#fff;
+    padding:10px 18px;border-radius:22px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:50}
+  .toast.show{opacity:.96}
+  .backdrop{position:fixed;inset:0;background:rgba(20,27,45,.45);display:flex;align-items:center;
+    justify-content:center;padding:18px;z-index:40}
+  .modal{background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px}
+  .accordion-head{cursor:pointer;user-select:none}
+  .caret{transition:.2s;color:var(--muted)}
+  .caret.open{transform:rotate(90deg)}
+  hr{border:none;border-top:1px solid var(--line);margin:14px 0}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <h1>ALFA SMS</h1>
+  <div class="sub">Централизованное управление устройствами</div>
+  <div id="content"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+if (TG) { try { TG.ready(); TG.expand(); TG.setHeaderColor && TG.setHeaderColor('#eef1f6'); } catch(e){} }
+
+const $ = (s,r=document)=>r.querySelector(s);
+const el = (tag,props={},...kids)=>{const e=document.createElement(tag);Object.assign(e,props);
+  for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
+
+let toastTimer=null;
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),1800);}
+
+// --- API ---
+async function api(method, path, body){
+  const headers={'Content-Type':'application/json'};
+  if (TG && TG.initData) headers['X-Init-Data']=TG.initData;
+  const res=await fetch(path,{method,headers,body:body!=null?JSON.stringify(body):undefined});
+  let data=null; try{data=await res.json();}catch(e){}
+  return {code:res.status, data:data||{}};
+}
+
+let STATE=null; // token state view
+
+async function load(){
+  const {code,data}=await api('GET','/api/mini/state');
+  if(code!==200){ renderError('Не удалось связаться с сервером'); return; }
+  if(data.needToken){ renderTokenEntry(); return; }
+  STATE=data.state; render();
+}
+
+// --- Token entry ---
+function renderTokenEntry(msg){
+  const c=$('#content'); c.innerHTML='';
+  const input=el('input',{type:'text',id:'tokenInput',placeholder:'XXXXX-XXXXX-XXXXX-XXXXX',autocapitalize:'characters'});
+  const btn=el('button',{className:'btn',textContent:'Активировать'});
+  btn.onclick=async()=>{
+    const token=input.value.trim().toUpperCase();
+    if(!token){toast('Введите токен');return;}
+    btn.disabled=true;btn.textContent='Проверка…';
+    const {code,data}=await api('POST','/api/mini/bind',{token});
+    btn.disabled=false;btn.textContent='Активировать';
+    if(code===200){ STATE=data.state; toast('Токен активирован'); render(); return; }
+    const errs={invalid_token:'Токен не найден',disabled:'Токен отключён',expired:'Срок действия токена истёк',
+      bound_elsewhere:'Токен уже привязан к другому Telegram-аккаунту'};
+    toast(errs[data.error]||'Ошибка активации');
+  };
+  c.append(
+    el('div',{className:'card'},
+      el('div',{className:'small muted',style:'margin-bottom:10px'},'Введите токен доступа, который вам выдали. Он привяжется к вашему Telegram — вводить повторно не потребуется.'),
+      el('label',{className:'field'},'Токен доступа'),
+      input,
+      el('div',{style:'height:12px'}),
+      btn,
+      msg?el('div',{className:'small',style:'color:var(--danger);margin-top:10px'},msg):null
+    )
+  );
+}
+
+function renderError(msg){
+  const c=$('#content'); c.innerHTML='';
+  c.append(el('div',{className:'card center'},
+    el('div',{className:'muted'},msg),
+    el('div',{style:'height:12px'}),
+    el('button',{className:'btn sec small',textContent:'Повторить',onclick:load})
+  ));
+}
+
+// --- Main render ---
+function render(){
+  const c=$('#content'); c.innerHTML='';
+  const s=STATE;
+
+  if(!s.valid){
+    const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
+    c.append(el('div',{className:'card'},
+      el('div',{className:'row between'},
+        el('div',{},el('b',{},'Токен недоступен'),el('div',{className:'small muted'},reason)),
+        el('button',{className:'btn ghost small',textContent:'Сменить токен',onclick:()=>renderTokenEntry()})
+      )));
+  }
+
+  // Global work switch
+  const gsw=el('input',{type:'checkbox',checked:!!s.globalOn,disabled:!s.valid});
+  gsw.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/global',{on:gsw.checked});
+    if(code===200){STATE=data.state;render();toast(gsw.checked?'Все устройства в работе':'Устройства остановлены');}
+    else{toast('Не удалось изменить');gsw.checked=!gsw.checked;}
+  };
+  c.append(el('div',{className:'card global'},
+    el('div',{className:'row between'},
+      el('div',{className:'grow'},
+        el('div',{className:'ttl'},'Включить все устройства в работу'),
+        el('div',{className:'desc'},'Мгновенный запуск отправки по заданным настройкам. Неактивные устройства не участвуют.')
+      ),
+      swWrap(gsw)
+    )
+  ));
+
+  // Devices header
+  const used=s.deviceCount, lim=s.deviceLimit;
+  c.append(el('div',{className:'row between',style:'margin:6px 2px 8px'},
+    el('div',{className:'small muted'},`Устройства ${used} / ${lim}`),
+    el('div',{className:'small muted'}, s.globalOn?'🟢 в работе':'⚪ остановлено')
+  ));
+
+  // Device cards
+  if(s.devices.length===0){
+    c.append(el('div',{className:'card center muted small'},'Устройств пока нет. Добавьте первое устройство.'));
+  }
+  for(const d of s.devices) c.append(deviceCard(d));
+
+  // Add device
+  const canAdd=s.canAddDevice;
+  const addBtn=el('button',{className:'btn',textContent:'＋ Добавить устройство',disabled:!canAdd});
+  addBtn.onclick=addDeviceFlow;
+  c.append(addBtn);
+  if(!canAdd && s.valid){
+    c.append(el('div',{className:'tiny muted center',style:'margin-top:8px'},
+      used>=lim?'Достигнут лимит устройств. Обратитесь к администратору, чтобы увеличить.':'Добавление недоступно.'));
+  }
+}
+
+function swWrap(input){const w=el('label',{className:'sw'});w.append(input,el('span',{className:'slider'}));return w;}
+
+function deviceCard(d){
+  const card=el('div',{className:'card'});
+
+  // Header: name + active switch
+  const asw=el('input',{type:'checkbox',checked:!!d.active});
+  asw.onchange=async()=>{
+    const {code,data}=await api('POST',`/api/mini/device/${d.id}/active`,{active:asw.checked});
+    if(code===200){ STATE=data.state; render(); }
+    else{toast('Ошибка');asw.checked=!asw.checked;}
+  };
+
+  const statusBadges=el('div',{className:'row',style:'gap:6px;flex-wrap:wrap;margin-top:6px'});
+  statusBadges.append(
+    d.active?el('span',{className:'badge on'},el('i',{className:'dot'}),'Активно')
+            :el('span',{className:'badge off'},el('i',{className:'dot'}),'Неактивно')
+  );
+  if(!d.paired) statusBadges.append(el('span',{className:'badge off'},'Не привязано'));
+  else statusBadges.append(d.online?el('span',{className:'badge run'},'📶 На связи'):el('span',{className:'badge off'},'Оффлайн'));
+  const st=d.status||{};
+  if(d.paired && st.running) statusBadges.append(el('span',{className:'badge run'},`▶ Отправлено: ${st.sentCount||0}`));
+  if(d.paired && st.triggerCount) statusBadges.append(el('span',{className:'badge on'},`Триггеров: ${st.triggerCount}`));
+  if(st.lastError) statusBadges.append(el('span',{className:'badge err'},'⚠ '+st.lastError));
+
+  const nameEl=el('div',{className:'dev-name'},d.name);
+  card.append(el('div',{className:'row between'},
+    el('div',{className:'grow'}, nameEl, statusBadges),
+    swWrap(asw)
+  ));
+
+  // If not paired, show QR pairing block
+  if(!d.paired){
+    card.append(pairingBlock(d));
+  }
+
+  // Accordion: settings
+  const caret=el('span',{className:'caret'},'▶');
+  const head=el('div',{className:'row between accordion-head',style:'margin-top:14px'},
+    el('b',{},'Настройки отправки'), caret);
+  const panel=el('div',{className:'hidden',style:'margin-top:6px'});
+  head.onclick=()=>{
+    const open=panel.classList.toggle('hidden')===false;
+    caret.classList.toggle('open',open);
+    if(open && !panel.dataset.built){ buildSettings(panel,d); panel.dataset.built='1'; }
+  };
+  card.append(el('hr'),head,panel);
+
+  // Footer actions
+  card.append(el('div',{className:'row',style:'gap:8px;margin-top:12px'},
+    el('button',{className:'btn sec small',textContent:'Переименовать',onclick:()=>renameFlow(d)}),
+    el('button',{className:'btn danger small',textContent:'Удалить',onclick:()=>deleteFlow(d)})
+  ));
+  return card;
+}
+
+function pairingBlock(d){
+  const box=el('div',{className:'card',style:'background:#f8fafc;margin-top:12px;margin-bottom:0'});
+  if(d.pairing){
+    const qr=el('div',{className:'qrbox'});
+    renderQr(qr, d.pairing.qr);
+    box.append(
+      el('div',{className:'small',style:'margin-bottom:6px'},'Откройте приложение ALFA SMS на телефоне и наведите камеру на этот QR-код:'),
+      qr,
+      el('div',{className:'center'}, el('span',{className:'code'}, d.pairing.code)),
+      el('div',{className:'tiny muted center'},'Код действует ограниченное время.'),
+      el('div',{style:'height:8px'}),
+      el('button',{className:'btn sec small',textContent:'Обновить код',onclick:()=>repair(d)})
+    );
+  }else{
+    box.append(
+      el('div',{className:'small muted'},'Код привязки истёк.'),
+      el('div',{style:'height:8px'}),
+      el('button',{className:'btn sec small',textContent:'Показать новый QR',onclick:()=>repair(d)})
+    );
+  }
+  return box;
+}
+
+async function repair(d){
+  const {code,data}=await api('POST',`/api/mini/device/${d.id}/pair`,{});
+  if(code===200){STATE=data.state;render();}else toast('Ошибка');
+}
+
+function renderQr(container, text){
+  try{
+    const qr=qrcode(0,'M'); qr.addData(text); qr.make();
+    container.innerHTML=qr.createSvgTag({cellSize:6,margin:2,scalable:true});
+  }catch(e){ container.textContent='Не удалось построить QR'; }
+}
+
+// --- Settings form ---
+function timeToSec(v){ if(!v)return 0; const p=v.split(':').map(Number); return (p[0]||0)*3600+(p[1]||0)*60+(p[2]||0); }
+function secToTime(s){ const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;
+  return [h,m,x].map(n=>String(n).padStart(2,'0')).join(':'); }
+
+function buildSettings(panel, d){
+  const cfg=Object.assign({phone:'',message1:'',message2:'',intervalSec:15,windows:[],repeatDaily:false,startAtMillis:0,triggerLimit:0}, d.config||{});
+
+  const phone=el('input',{type:'tel',value:cfg.phone,placeholder:'+7...'});
+  const msg1=el('textarea',{value:cfg.message1,placeholder:'Часть 1'});
+  const msg2=el('textarea',{value:cfg.message2,placeholder:'Часть 2'});
+  const interval=el('input',{type:'number',min:'1',value:cfg.intervalSec});
+
+  // interval quick chips
+  const chips=el('div',{className:'row',style:'gap:8px;margin-top:8px'});
+  [5,10,15].forEach(n=>{const ch=el('div',{className:'chip'+(Number(cfg.intervalSec)===n?' on':''),textContent:n});
+    ch.onclick=()=>{interval.value=n;chips.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));ch.classList.add('on');};
+    chips.append(ch);});
+
+  // windows
+  const winList=el('div',{className:'windows-list'});
+  function addWinRow(w){
+    const start=el('input',{type:'time',step:'1',value:secToTime(w?w.startSec:9*3600)});
+    const end=el('input',{type:'time',step:'1',value:secToTime(w?w.endSec:12*3600)});
+    const del=el('button',{className:'btn ghost small',textContent:'✕',style:'color:var(--danger)'});
+    const row=el('div',{className:'wrow'},start,el('span',{className:'muted'},'–'),end,del);
+    del.onclick=()=>row.remove();
+    row._get=()=>({startSec:timeToSec(start.value),endSec:timeToSec(end.value)});
+    winList.append(row);
+  }
+  (cfg.windows||[]).forEach(addWinRow);
+  const addWin=el('button',{className:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)});
+
+  const repeat=el('input',{type:'checkbox',checked:!!cfg.repeatDaily});
+
+  // start time
+  const startNow=cfg.startAtMillis>0;
+  const startInput=el('input',{type:'datetime-local',step:'1'});
+  if(startNow){ const dt=new Date(cfg.startAtMillis); dt.setMinutes(dt.getMinutes()-dt.getTimezoneOffset());
+    startInput.value=dt.toISOString().slice(0,19); }
+  const clearStart=el('button',{className:'btn ghost small',textContent:'Сейчас (сброс)',onclick:()=>{startInput.value='';}});
+
+  const limit=el('input',{type:'number',min:'0',value:cfg.triggerLimit||''});
+
+  const saveBtn=el('button',{className:'btn',textContent:'Сохранить настройки',style:'margin-top:16px'});
+  saveBtn.onclick=async()=>{
+    const windows=[...winList.querySelectorAll('.wrow')].map(r=>r._get());
+    let startAtMillis=0;
+    if(startInput.value){ const ms=new Date(startInput.value).getTime(); if(ms>Date.now()) startAtMillis=ms; }
+    const config={
+      phone:phone.value.trim(), message1:msg1.value, message2:msg2.value,
+      intervalSec:Math.max(1,parseInt(interval.value,10)||15),
+      windows, repeatDaily:repeat.checked, startAtMillis,
+      triggerLimit:Math.max(0,parseInt(limit.value,10)||0),
+    };
+    saveBtn.disabled=true;saveBtn.textContent='Сохранение…';
+    const {code,data}=await api('POST',`/api/mini/device/${d.id}/config`,{config});
+    saveBtn.disabled=false;saveBtn.textContent='Сохранить настройки';
+    if(code===200){ STATE=data.state; toast('Настройки сохранены'); }
+    else toast('Ошибка сохранения');
+  };
+
+  panel.append(
+    el('label',{className:'field'},'Номер телефона'), phone,
+    el('label',{className:'field'},'Сообщение — часть 1'), msg1,
+    el('label',{className:'field'},'Сообщение — часть 2'), msg2,
+    el('label',{className:'field'},'Интервал отправки (секунды)'), interval, chips,
+    el('label',{className:'field'},'Промежутки отправки (по желанию)'),
+    el('div',{className:'tiny muted'},'Время суток, когда идёт отправка (например 09:00:00–12:00:00). Вне промежутков — пауза. Если пусто — отправка начинается сразу при включении.'),
+    winList, addWin,
+    el('div',{className:'row between',style:'margin-top:12px'},
+      el('span',{},'Повторять каждый день'), swWrap(repeat)),
+    el('label',{className:'field'},'Когда начать (если промежутки не заданы)'),
+    el('div',{className:'tiny muted'},'Пусто = запуск сразу при включении в работу.'),
+    startInput, el('div',{className:'center'},clearStart),
+    el('label',{className:'field'},'Кол-во отправок (лимит триггеров)'),
+    el('div',{className:'tiny muted'},'После скольких принятых «символ» остановиться. Пусто — без ограничения.'),
+    limit,
+    saveBtn
+  );
+}
+
+// --- Add / rename / delete flows ---
+function modal(node){
+  const bd=el('div',{className:'backdrop'});
+  bd.onclick=(e)=>{if(e.target===bd)bd.remove();};
+  const m=el('div',{className:'modal'}); m.append(node); bd.append(m); document.body.append(bd);
+  return bd;
+}
+
+function addDeviceFlow(){
+  const input=el('input',{type:'text',placeholder:'Например: Основной'});
+  const bd=modal(el('div',{},
+    el('b',{},'Новое устройство'),
+    el('label',{className:'field'},'Название'),
+    input,
+    el('div',{style:'height:14px'}),
+    el('button',{className:'btn',textContent:'Добавить',onclick:async()=>{
+      const name=input.value.trim()||'Устройство';
+      const {code,data}=await api('POST','/api/mini/device',{name});
+      bd.remove();
+      if(code===200){ STATE=data.state; render(); toast('Устройство добавлено — покажите QR телефону'); }
+      else if(data.error==='quota_exceeded'){ if(data.state)STATE=data.state; render(); toast('Достигнут лимит устройств'); }
+      else toast('Ошибка');
+    }}),
+    el('button',{className:'btn ghost',textContent:'Отмена',style:'margin-top:6px',onclick:()=>bd.remove()})
+  ));
+  setTimeout(()=>input.focus(),50);
+}
+
+function renameFlow(d){
+  const input=el('input',{type:'text',value:d.name});
+  const bd=modal(el('div',{},
+    el('b',{},'Переименовать'),
+    el('label',{className:'field'},'Название'), input,
+    el('div',{style:'height:14px'}),
+    el('button',{className:'btn',textContent:'Сохранить',onclick:async()=>{
+      const name=input.value.trim(); if(!name){toast('Введите название');return;}
+      const {code,data}=await api('POST',`/api/mini/device/${d.id}/name`,{name});
+      bd.remove(); if(code===200){STATE=data.state;render();}else toast('Ошибка');
+    }}),
+    el('button',{className:'btn ghost',textContent:'Отмена',style:'margin-top:6px',onclick:()=>bd.remove()})
+  ));
+  setTimeout(()=>input.select(),50);
+}
+
+function deleteFlow(d){
+  const doDelete=async()=>{
+    const {code,data}=await api('DELETE',`/api/mini/device/${d.id}`);
+    if(code===200){STATE=data.state;render();toast('Устройство удалено');}else toast('Ошибка');
+  };
+  if(TG && TG.showConfirm){ TG.showConfirm(`Удалить «${d.name}»?`,(ok)=>{if(ok)doDelete();}); return; }
+  const bd=modal(el('div',{},
+    el('b',{},'Удалить устройство?'),
+    el('div',{className:'small muted',style:'margin-top:8px'},`«${d.name}» будет удалено, слот освободится.`),
+    el('div',{style:'height:14px'}),
+    el('button',{className:'btn danger',textContent:'Удалить',onclick:()=>{bd.remove();doDelete();}}),
+    el('button',{className:'btn ghost',textContent:'Отмена',style:'margin-top:6px',onclick:()=>bd.remove()})
+  ));
+}
+
+// Refresh device statuses periodically (light polling of state for the UI).
+setInterval(()=>{ if(STATE && STATE.valid && !document.querySelector('.backdrop')) refreshStateQuietly(); }, 8000);
+async function refreshStateQuietly(){
+  // Do not disturb an open settings accordion; only refresh when none is open.
+  if(document.querySelector('.accordion-head .caret.open')) return;
+  const {code,data}=await api('GET','/api/mini/state');
+  if(code===200 && !data.needToken){ STATE=data.state; render(); }
+}
+
+load();
+</script>
+</body>
+</html>

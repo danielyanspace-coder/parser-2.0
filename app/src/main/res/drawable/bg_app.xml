@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base vertical gradient -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="@color/bg_dark2"
+                android:endColor="@color/bg_dark" />
+        </shape>
+    </item>
+    <!-- Cyan glow bleeding in from the top -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="520dp"
+                android:centerX="0.15"
+                android:centerY="0.0"
+                android:startColor="#3300E5FF"
+                android:endColor="@android:color/transparent" />
+        </shape>
+    </item>
+    <!-- Magenta glow bleeding in from the bottom right -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="520dp"
+                android:centerX="0.95"
+                android:centerY="1.0"
+                android:startColor="#2AFF3DBE"
+                android:endColor="@android:color/transparent" />
+        </shape>
+    </item>
+</layer-list>

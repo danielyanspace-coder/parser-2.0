@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ALFA SMS</string>
+
+    <!-- Scanner / pairing screen -->
+    <string name="tagline">Сканер привязки устройства</string>
+    <string name="scan_button">Сканировать QR‑код</string>
+    <string name="rescan_button">Пересканировать</string>
+    <string name="scan_prompt">Наведите камеру на QR‑код из мини‑аппа Telegram</string>
+    <string name="not_paired">Устройство не привязано</string>
+    <string name="not_paired_hint">Откройте мини‑апп ALFA SMS в Telegram, добавьте устройство и отсканируйте появившийся QR‑код.</string>
+    <string name="pairing">Привязка…</string>
+    <string name="paired_as">Привязано как «%1$s»</string>
+    <string name="pair_failed">Не удалось привязать: %1$s</string>
+    <string name="pair_bad_qr">Это не QR‑код ALFA SMS</string>
+    <string name="pair_success">Устройство привязано</string>
+
+    <!-- Status -->
+    <string name="state_waiting">Ожидание команды из мини‑аппа…</string>
+    <string name="state_working">🟢 В работе • отправлено: %1$d</string>
+    <string name="state_stopped">⚪ Остановлено (выключено в мини‑аппе)</string>
+    <string name="state_inactive">⚪ Устройство неактивно</string>
+    <string name="state_paused">⏸ Пауза (ожидание «успешно»)</string>
+    <string name="state_scheduled">⏳ Ожидает времени старта…</string>
+    <string name="state_token_invalid">⛔ Токен отключён или истёк</string>
+    <string name="state_offline">⚠ Нет связи с сервером…</string>
+    <string name="state_triggers">триггеров: %1$d</string>
+    <string name="state_triggers_limit">триггеров: %1$d / %2$d</string>
+    <string name="state_error">⚠ Ошибка: %1$s</string>
+
+    <!-- Permissions / notifications -->
+    <string name="permission_camera_needed">Для сканирования нужен доступ к камере</string>
+    <string name="permission_sms_needed">Для работы нужно разрешение на отправку SMS</string>
+    <string name="channel_name">ALFA SMS</string>
+    <string name="notification_title">ALFA SMS</string>
+    <string name="notification_working">Управляется из мини‑аппа</string>
+    <string name="notification_text">Устройство «%1$s»</string>
+
+    <!-- Battery -->
+    <string name="battery_title">Разрешить работу в фоне</string>
+    <string name="battery_message">Чтобы устройство отправляло SMS даже при выключенном экране, исключите приложение из экономии батареи. Открыть настройки?</string>
+    <string name="battery_allow">Разрешить</string>
+    <string name="cancel">Позже</string>
+
+    <string name="unpair">Отвязать устройство</string>
+    <string name="unpair_confirm">Отвязать это устройство? Настройки останутся в мини‑аппе, но связь придётся привязать заново.</string>
+
+    <string name="brand_footer">Production Splinter &amp; Sergio</string>
+</resources>

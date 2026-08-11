@@ -1,0 +1,13 @@
+{
+  "name": "alfa-sms-central",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Centralized control server for ALFA SMS: admin panel, Telegram mini-app API and device (APK) API. Zero dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

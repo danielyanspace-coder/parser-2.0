@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Always-dark neon theme -->
+    <style name="Theme.MessageSender" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@drawable/bg_app</item>
+        <item name="colorPrimary">@color/neon_cyan</item>
+        <item name="colorOnPrimary">@color/text_on_neon</item>
+        <item name="colorSecondary">@color/neon_magenta</item>
+        <item name="android:colorBackground">@color/bg_dark</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="android:statusBarColor">@color/bg_dark</item>
+        <item name="android:navigationBarColor">@color/bg_dark</item>
+        <item name="android:textColorHint">@color/text_secondary</item>
+    </style>
+
+    <!-- Neon outlined input field -->
+    <style name="Widget.Alfa.TextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeColor">@color/neon_cyan</item>
+        <item name="boxStrokeWidth">1dp</item>
+        <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="hintTextColor">@color/neon_cyan</item>
+        <item name="android:textColorHint">@color/text_secondary</item>
+        <item name="boxBackgroundColor">@color/surface</item>
+        <item name="boxCornerRadiusTopStart">14dp</item>
+        <item name="boxCornerRadiusTopEnd">14dp</item>
+        <item name="boxCornerRadiusBottomStart">14dp</item>
+        <item name="boxCornerRadiusBottomEnd">14dp</item>
+    </style>
+
+    <!-- Glowing neon button (colored elevation shadow on API 28+) -->
+    <style name="Widget.Alfa.Button" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/neon_cyan</item>
+        <item name="android:textColor">@color/text_on_neon</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.03</item>
+        <item name="cornerRadius">16dp</item>
+        <item name="android:paddingTop">14dp</item>
+        <item name="android:paddingBottom">14dp</item>
+        <item name="elevation">10dp</item>
+        <item name="android:outlineSpotShadowColor">@color/neon_cyan</item>
+        <item name="android:outlineAmbientShadowColor">@color/neon_cyan</item>
+    </style>
+
+    <style name="Widget.Alfa.Button.Magenta">
+        <item name="backgroundTint">@color/neon_magenta</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:outlineSpotShadowColor">@color/neon_magenta</item>
+        <item name="android:outlineAmbientShadowColor">@color/neon_magenta</item>
+    </style>
+
+    <!-- Secondary/outline button for the schedule picker -->
+    <style name="Widget.Alfa.Button.Outline" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="strokeColor">@color/neon_cyan</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="android:textColor">@color/neon_cyan</item>
+        <item name="cornerRadius">14dp</item>
+    </style>
+
+</resources>
