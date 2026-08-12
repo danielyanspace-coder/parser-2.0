@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ALFA SMS</string>
+    <string name="logo_title">ALFA</string>
+    <string name="logo_by">By CheckOut</string>
 
     <!-- Scanner / pairing screen -->
     <string name="tagline">Сканер привязки устройства</string>
