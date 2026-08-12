@@ -253,12 +253,21 @@ function paymentMessage(p) {
 function secondOfDayNow(d = new Date()) {
   return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
 }
+function windowContains(w, s) {
+  return w.startSec <= w.endSec
+    ? (s >= w.startSec && s < w.endSec)
+    : (s >= w.startSec || s < w.endSec);
+}
 function insideAnyWindow(windows, d = new Date()) {
   if (!windows || !windows.length) return false;
   const s = secondOfDayNow(d);
-  return windows.some((w) => (w.startSec <= w.endSec
-    ? (s >= w.startSec && s < w.endSec)
-    : (s >= w.startSec || s < w.endSec)));
+  return windows.some((w) => windowContains(w, s));
+}
+// Returns the window that "now" is inside, or null.
+function currentWindow(windows, d = new Date()) {
+  if (!windows || !windows.length) return null;
+  const s = secondOfDayNow(d);
+  return windows.find((w) => windowContains(w, s)) || null;
 }
 function localDateStr(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -891,7 +900,7 @@ const server = http.createServer(async (req, res) => {
         if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
         const body = await readJson(req);
         t.schedule = sanitizeSchedule(body && body.schedule);
-        t.lastScheduleRun = ''; // a new schedule may run again
+        t.scheduleRuns = []; // a new schedule may run again
         bumpToken(t); // schedule applies to all devices — push to all
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t) });
@@ -1158,16 +1167,22 @@ setInterval(() => {
     let changed = false;
     for (const t of db.tokens) {
       if (!tokenValid(t)) continue;
-      if (!scheduleActiveNow(t)) continue;
-      const key = (t.schedule && t.schedule.repeatDaily) ? localDateStr() : 'once';
-      if (t.lastScheduleRun === key) continue;
-      t.lastScheduleRun = key;
+      const sch = t.schedule || defaultSchedule();
+      const w = currentWindow(sch.windows);
+      if (!w) continue;
+      // Per-window key so multiple windows (e.g. 03:00 and 16:00) each fire.
+      // repeatDaily → keyed by date (once per day); else once ever (until edit).
+      const key = (sch.repeatDaily ? localDateStr() : 'once') + `#${w.startSec}-${w.endSec}`;
+      t.scheduleRuns = t.scheduleRuns || [];
+      if (t.scheduleRuns.includes(key)) continue;
+      t.scheduleRuns.push(key);
+      if (t.scheduleRuns.length > 60) t.scheduleRuns = t.scheduleRuns.slice(-60);
       if (!t.globalOn) startSession(t, 'schedule');
       changed = true;
     }
     if (changed) saveDb();
   } catch (e) { console.error('scheduler error:', e.message); }
-}, 30000);
+}, 15000);
 
 server.listen(PORT, () => {
   console.log(`ALFA SMS central server on port ${PORT}`);

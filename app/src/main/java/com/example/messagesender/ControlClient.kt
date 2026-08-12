@@ -110,8 +110,19 @@ object ControlClient {
 
     private data class Resp(val code: Int, val body: String?)
 
+    // The connection currently blocked in a long-poll, so a watchdog / the UI
+    // can abort a stale one (e.g. a half-open socket after Doze) and force a
+    // fresh reconnect instead of hanging on "Нет связи с сервером".
+    @Volatile private var activeConn: HttpURLConnection? = null
+
+    /** Aborts the in-flight request so the blocked read returns and reconnects. */
+    fun abort() {
+        try { activeConn?.disconnect() } catch (e: Exception) { /* ignore */ }
+    }
+
     private fun post(urlStr: String, jsonBody: String, readTimeoutMs: Int): Resp {
         val conn = URL(urlStr).openConnection() as HttpURLConnection
+        activeConn = conn
         return try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 15000
@@ -124,6 +135,7 @@ object ControlClient {
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             Resp(code, text)
         } finally {
+            activeConn = null
             conn.disconnect()
         }
     }

@@ -308,9 +308,13 @@ function renderHome(c){
       badges.append(d.active?el('span',{class:'badge on'},el('i',{class:'dot'}),'Активно'):el('span',{class:'badge off'},el('i',{class:'dot'}),'Неактивно'));
       if(!d.paired)badges.append(el('span',{class:'badge off'},'Не привязано'));
       else if(d.online)badges.append(el('span',{class:'badge run'},'📶 На связи'));
+      const sw=swWrap(asw);
+      // Tapping the switch must NOT open the device screen.
+      sw.onclick=(e)=>e.stopPropagation();
+      sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
       const row=el('div',{class:'devrow'},
         el('div',{class:'grow'},el('div',{class:'nm ellipsis'},d.name),badges),
-        swWrap(asw),el('span',{class:'arw muted',textContent:'›'}));
+        sw,el('span',{class:'arw muted',textContent:'›'}));
       row.onclick=()=>go('device',{id:d.id});
       list.append(row);
     });
@@ -347,27 +351,12 @@ function renderSchedule(c){
   (sch.windows||[]).forEach(addWinRow);
 
   const repeat=el('input',{type:'checkbox',checked:!!sch.repeatDaily});
-  // Start time = date + hh:mm:ss (seconds guaranteed).
-  const startDate=el('input',{type:'date'});
-  let startSecInit=0;
-  if(sch.startAtMillis>0){
-    const dt=new Date(sch.startAtMillis);
-    startDate.value=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
-    startSecInit=dt.getHours()*3600+dt.getMinutes()*60+dt.getSeconds();
-  }
-  const startTimeEl=timeTriple(startSecInit);
 
   const save=el('button',{class:'btn',textContent:'Сохранить',style:'margin-top:18px'});
   save.onclick=async()=>{
     const windows=[...winList.querySelectorAll('.winblock')].map(r=>r._get());
-    let startAtMillis=0;
-    if(startDate.value){
-      const sec=startTimeEl._get();
-      const [Y,Mo,D]=startDate.value.split('-').map(Number);
-      const ms=new Date(Y,Mo-1,D,Math.floor(sec/3600),Math.floor((sec%3600)/60),sec%60,0).getTime();
-      if(ms>Date.now()) startAtMillis=ms;
-    }
-    const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,repeatDaily:repeat.checked,startAtMillis};
+    // No date — windows are pure time-of-day and recur by the clock.
+    const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,repeatDaily:repeat.checked,startAtMillis:0};
     save.disabled=true;save.textContent='Сохранение…';
     const {code,data}=await api('POST','/api/mini/schedule',{schedule});
     save.disabled=false;save.textContent='Сохранить';
@@ -377,14 +366,10 @@ function renderSchedule(c){
   c.append(el('div',{class:'card'},
     el('label',{class:'field'},'Интервал отправки (секунды)'),interval,chips,
     el('label',{class:'field'},'Промежутки отправки (расписание)'),
-    el('div',{class:'tiny muted'},'Время суток, когда идёт отправка (например 09:00:00–12:00:00). Вне промежутков — пауза. Пусто — отправка сразу при включении.'),
+    el('div',{class:'tiny muted'},'Время суток (по МСК), когда идёт отправка — например 16:00:00–16:01:00. Дата не важна: как только на часах наступает промежуток, система отрабатывает. Вне промежутков — пауза. Можно добавить несколько.'),
     winList,
     el('button',{class:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)}),
-    el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день по этому сценарию'),swWrap(repeat)),
-    el('label',{class:'field'},'Когда начать (если промежутки не заданы)'),
-    el('div',{class:'tiny muted'},'Пусто = запуск сразу при включении в работу. Время по МСК, до секунд.'),
-    el('div',{class:'row',style:'gap:8px;margin-top:6px;flex-wrap:wrap'},startDate,startTimeEl),
-    el('div',{class:'center',style:'margin-top:6px'},el('button',{class:'btn ghost small',textContent:'Сбросить дату',onclick:()=>{startDate.value='';}})),
+    el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день'),swWrap(repeat)),
     save));
 }
 

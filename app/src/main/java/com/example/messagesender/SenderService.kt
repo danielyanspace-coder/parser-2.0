@@ -37,6 +37,7 @@ class SenderService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var syncThread: Thread? = null
     @Volatile private var stopping = false
+    @Volatile private var resyncNow = false
 
     private var sendExec: ScheduledExecutorService? = null
     private var pendingTick: ScheduledFuture<*>? = null
@@ -59,11 +60,14 @@ class SenderService : Service() {
 
         acquireWakeLock()
         startSyncThread()
-        if (intent?.action == ACTION_KICK) {
-            scheduleTick(0)
-        } else if (sendExec == null) {
+        // Always keep the tick loop alive — it also runs the connectivity watchdog.
+        if (sendExec == null) {
             sendExec = Executors.newSingleThreadScheduledExecutor()
             scheduleTick(0)
+        }
+        when (intent?.action) {
+            ACTION_KICK -> scheduleTick(0)
+            ACTION_SYNC_NOW -> forceResync()
         }
         return START_STICKY
     }
@@ -76,14 +80,16 @@ class SenderService : Service() {
         syncThread = Thread {
             while (!stopping) {
                 if (!DeviceStore.isPaired(this)) break
-                when (ControlClient.sync(this, waitForChange = true)) {
+                // After a forced resync do a quick (wait=false) refresh, then
+                // resume long-polling.
+                val wait = !resyncNow
+                resyncNow = false
+                when (ControlClient.sync(this, waitForChange = wait)) {
                     ControlClient.SyncResult.APPLIED -> {
                         updateNotification()
-                        // Instant start / config change: kick the send loop now.
                         if (DeviceStore.run(this)) scheduleTick(0)
                     }
                     ControlClient.SyncResult.UNAUTHORIZED -> {
-                        // The slot was re-paired to another phone. Unpair locally.
                         Log.i(TAG, "Unauthorized; clearing pairing")
                         DeviceStore.clearPairing(this)
                         shutdown()
@@ -92,11 +98,23 @@ class SenderService : Service() {
                     }
                     ControlClient.SyncResult.ERROR -> {
                         updateNotification()
-                        sleep(4000)
+                        // Retry immediately if a resync was just requested,
+                        // otherwise back off a little.
+                        sleep(if (resyncNow) 200 else ERROR_BACKOFF_MS)
                     }
                 }
             }
         }.apply { isDaemon = true; start() }
+    }
+
+    /**
+     * Forces a fresh reconnect: aborts a possibly-stale long-poll (half-open
+     * socket after the phone was asleep) and makes the loop reconnect at once.
+     */
+    private fun forceResync() {
+        resyncNow = true
+        ControlClient.abort()
+        startSyncThread() // restart if it somehow died
     }
 
     private fun sleep(ms: Long) { try { Thread.sleep(ms) } catch (e: InterruptedException) {} }
@@ -117,6 +135,15 @@ class SenderService : Service() {
 
     private fun tick() {
         if (stopping || !DeviceStore.isPaired(this)) return
+
+        // Watchdog: if we haven't heard from the server in a while, the long-poll
+        // socket is probably stale (Doze / lost radio). Force a reconnect so the
+        // device recovers on its own — critical for signal / schedule to fire.
+        val last = SenderStatus.lastSyncAt
+        if (last > 0L && System.currentTimeMillis() - last > STALE_MS) {
+            Log.i(TAG, "Sync stale; forcing reconnect")
+            forceResync()
+        }
 
         val running = DeviceStore.run(this)
         if (!running || DeviceStore.isSessionDone(this)) {
@@ -304,9 +331,14 @@ class SenderService : Service() {
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.example.messagesender.ACTION_STOP"
         const val ACTION_KICK = "com.example.messagesender.ACTION_KICK"
+        const val ACTION_SYNC_NOW = "com.example.messagesender.ACTION_SYNC_NOW"
 
         /** How often to re-check while idle (stopped, paused, outside a window). */
         private const val IDLE_MS = 8_000L
+        /** Back-off between failed sync attempts. */
+        private const val ERROR_BACKOFF_MS = 3_000L
+        /** If no server response for this long, the long-poll is stale → reconnect. */
+        private const val STALE_MS = 50_000L
 
         /** Signal mode: number of probe sends of the first payment, and spacing. */
         private const val SIGNAL_BURST_COUNT = 3
@@ -319,6 +351,12 @@ class SenderService : Service() {
 
         fun kick(context: Context) {
             val i = Intent(context, SenderService::class.java).apply { action = ACTION_KICK }
+            androidx.core.content.ContextCompat.startForegroundService(context, i)
+        }
+
+        /** Force an immediate reconnect + status refresh (e.g. when the app opens). */
+        fun syncNow(context: Context) {
+            val i = Intent(context, SenderService::class.java).apply { action = ACTION_SYNC_NOW }
             androidx.core.content.ContextCompat.startForegroundService(context, i)
         }
     }

@@ -79,6 +79,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Opening the app forces an immediate reconnect so a stale "Нет связи"
+        // clears right away instead of waiting for the watchdog.
+        if (DeviceStore.isPaired(this)) SenderService.syncNow(this)
         ui.removeCallbacks(statusPoller)
         ui.post(statusPoller)
     }
