@@ -81,18 +81,19 @@ function ensureDataDir() {
 
 function loadDb() {
   ensureDataDir();
-  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [] };
+  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [] };
   try {
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     db.tokens = db.tokens || [];
     db.devices = db.devices || [];
+    db.paymentsLog = db.paymentsLog || []; // log of successful ("успешно") payments
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
     console.error('Failed to read db.json, starting empty:', e.message);
-    return { tokens: [], devices: [] };
+    return { tokens: [], devices: [], paymentsLog: [] };
   }
 }
 
@@ -788,6 +789,24 @@ const server = http.createServer(async (req, res) => {
           tokens: db.tokens.map(adminTokenSummary),
         });
       }
+
+      // Summary of all successful ("успешно") payments across all users.
+      if (p === '/api/admin/payments' && m === 'GET') {
+        const log = db.paymentsLog || [];
+        const total = { count: log.length, sum: log.reduce((s, x) => s + amountValue(x.amount), 0) };
+        const byMap = {};
+        for (const x of log) {
+          const k = x.tokenId || '?';
+          if (!byMap[k]) byMap[k] = { tokenId: k, comment: x.tokenComment || '', count: 0, sum: 0 };
+          byMap[k].count++; byMap[k].sum += amountValue(x.amount);
+        }
+        const byToken = Object.values(byMap).sort((a, b) => b.sum - a.sum);
+        const recent = log.slice(-200).reverse().map((x) => ({
+          deviceName: x.deviceName, requisites: x.requisites, amount: x.amount,
+          at: x.at, tokenComment: x.tokenComment,
+        }));
+        return sendJson(res, 200, { total, byToken, recent });
+      }
       if (p === '/api/admin/token' && m === 'POST') {
         const body = await readJson(req);
         const days = parseInt(body && body.days, 10);
@@ -971,6 +990,18 @@ const server = http.createServer(async (req, res) => {
         tgSend(t.telegramId,
           `❗️ Реквизит «<b>${eschtml(requisites)}</b>» отклоняется платёжным шлюзом — замените его на другой.\n` +
           `Устройство: «<b>${eschtml(d.name)}</b>».`);
+      }
+      // A payment went through ("успешно") — log it for the admin summary.
+      if (body.type === 'success' && t) {
+        db.paymentsLog.push({
+          tokenId: t.id, tokenComment: t.comment || '',
+          deviceId: d.id, deviceName: d.name,
+          requisites: String(body.requisites || '').slice(0, 300),
+          amount: normalizeAmount(body.amount).slice(0, 32),
+          at: now(),
+        });
+        if (db.paymentsLog.length > 10000) db.paymentsLog = db.paymentsLog.slice(-8000);
+        saveDbSoon();
       }
       return sendJson(res, 200, { ok: true });
     }

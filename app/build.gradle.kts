@@ -8,7 +8,9 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.messagesender"
+        // New, distinct package so this installs as a brand-new app (not an
+        // update of the old ALFA SMS) and has no signature conflict with it.
+        applicationId = "com.checkout.alfasms"
         minSdk = 24
         targetSdk = 34
         // Bump versionCode on every release. Override: -PversionCode=3 -PversionName=2.1

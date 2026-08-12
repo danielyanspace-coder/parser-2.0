@@ -90,6 +90,12 @@
   .kv{font-size:13px;color:var(--muted)} .kv b{color:var(--ink);font-weight:600}
 
   .windows-list .wrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .winblock{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:10px;background:var(--card2)}
+  .trow{display:inline-flex;align-items:center;gap:3px}
+  .tnum{width:52px;padding:9px 4px;text-align:center;border:1px solid var(--line);border-radius:8px;background:var(--input-bg);color:var(--ink);font-size:15px}
+  .tsep{color:var(--muted);font-weight:700}
+  .tlbl{display:inline-block;width:58px;font-size:13px;color:var(--muted)}
+  .tunit{font-size:10px;color:var(--muted);text-align:center;width:52px;display:inline-block}
   .qrbox{text-align:center;padding:10px 0}
   .qrbox svg{width:210px;height:210px;background:#fff;border-radius:8px}
   .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.15em;background:var(--card2);padding:8px 12px;border-radius:8px;display:inline-block;margin:6px 0}
@@ -160,7 +166,7 @@ async function api(method,path,body){
 }
 
 // --- App state + router ---
-let STATE=null, IS_ADMIN=false, ADMIN_DATA=null;
+let STATE=null, IS_ADMIN=false, ADMIN_DATA=null, ADMIN_PAY=null;
 let view={name:'home',params:{}};
 const stack=[];
 
@@ -326,24 +332,41 @@ function renderSchedule(c){
 
   const winList=el('div',{class:'windows-list'});
   function addWinRow(w){
-    const start=el('input',{type:'time',step:'1',value:secToTime(w?w.startSec:9*3600)});
-    const end=el('input',{type:'time',step:'1',value:secToTime(w?w.endSec:12*3600)});
-    const del=el('button',{class:'btn ghost small',textContent:'✕',style:'color:var(--danger)'});
-    const row=el('div',{class:'wrow'},start,el('span',{class:'muted'},'–'),end,del);
+    const st=timeTriple(w?w.startSec:9*3600);
+    const en=timeTriple(w?w.endSec:12*3600);
+    const del=el('button',{class:'btn ghost small',textContent:'✕ удалить',style:'color:var(--danger);margin-top:6px'});
+    const row=el('div',{class:'winblock'},
+      el('div',{class:'row',style:'gap:6px'},el('span',{class:'tlbl'},'Начало'),st),
+      el('div',{class:'row',style:'gap:6px;margin-top:8px'},el('span',{class:'tlbl'},'Конец'),en),
+      el('div',{class:'tunit',style:'width:auto;margin-top:2px'},'часы : минуты : секунды'),
+      del);
     del.onclick=()=>row.remove();
-    row._get=()=>({startSec:timeToSec(start.value),endSec:timeToSec(end.value)});
+    row._get=()=>({startSec:st._get(),endSec:en._get()});
     winList.append(row);
   }
   (sch.windows||[]).forEach(addWinRow);
 
   const repeat=el('input',{type:'checkbox',checked:!!sch.repeatDaily});
-  const startInput=el('input',{type:'datetime-local',step:'1'});
-  if(sch.startAtMillis>0){const dt=new Date(sch.startAtMillis);dt.setMinutes(dt.getMinutes()-dt.getTimezoneOffset());startInput.value=dt.toISOString().slice(0,19);}
+  // Start time = date + hh:mm:ss (seconds guaranteed).
+  const startDate=el('input',{type:'date'});
+  let startSecInit=0;
+  if(sch.startAtMillis>0){
+    const dt=new Date(sch.startAtMillis);
+    startDate.value=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+    startSecInit=dt.getHours()*3600+dt.getMinutes()*60+dt.getSeconds();
+  }
+  const startTimeEl=timeTriple(startSecInit);
 
   const save=el('button',{class:'btn',textContent:'Сохранить',style:'margin-top:18px'});
   save.onclick=async()=>{
-    const windows=[...winList.querySelectorAll('.wrow')].map(r=>r._get());
-    let startAtMillis=0; if(startInput.value){const ms=new Date(startInput.value).getTime();if(ms>Date.now())startAtMillis=ms;}
+    const windows=[...winList.querySelectorAll('.winblock')].map(r=>r._get());
+    let startAtMillis=0;
+    if(startDate.value){
+      const sec=startTimeEl._get();
+      const [Y,Mo,D]=startDate.value.split('-').map(Number);
+      const ms=new Date(Y,Mo-1,D,Math.floor(sec/3600),Math.floor((sec%3600)/60),sec%60,0).getTime();
+      if(ms>Date.now()) startAtMillis=ms;
+    }
     const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,repeatDaily:repeat.checked,startAtMillis};
     save.disabled=true;save.textContent='Сохранение…';
     const {code,data}=await api('POST','/api/mini/schedule',{schedule});
@@ -359,9 +382,9 @@ function renderSchedule(c){
     el('button',{class:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)}),
     el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день по этому сценарию'),swWrap(repeat)),
     el('label',{class:'field'},'Когда начать (если промежутки не заданы)'),
-    el('div',{class:'tiny muted'},'Пусто = запуск сразу при включении в работу.'),
-    startInput,
-    el('div',{class:'center',style:'margin-top:6px'},el('button',{class:'btn ghost small',textContent:'Сейчас (сброс)',onclick:()=>{startInput.value='';}})),
+    el('div',{class:'tiny muted'},'Пусто = запуск сразу при включении в работу. Время по МСК, до секунд.'),
+    el('div',{class:'row',style:'gap:8px;margin-top:6px;flex-wrap:wrap'},startDate,startTimeEl),
+    el('div',{class:'center',style:'margin-top:6px'},el('button',{class:'btn ghost small',textContent:'Сбросить дату',onclick:()=>{startDate.value='';}})),
     save));
 }
 
@@ -483,13 +506,41 @@ function renderPayment(c){
 }
 
 // ---------- Admin panel ----------
-async function loadAdmin(){ const {code,data}=await api('GET','/api/admin/tokens'); if(code===200)ADMIN_DATA=data; else toast('Нет доступа'); }
+function money(n){const s=(Math.round((+n||0)*100)/100).toString().replace('.',',');return s.replace(/\B(?=(\d{3})+(?![\d,]))/g,' ');}
+async function loadAdmin(){
+  const a=await api('GET','/api/admin/tokens'); if(a.code===200)ADMIN_DATA=a.data; else {toast('Нет доступа');return;}
+  const p=await api('GET','/api/admin/payments'); if(p.code===200)ADMIN_PAY=p.data;
+}
 
 function renderAdmin(c){
   c.append(el('div',{class:'screen-title'},'Админ‑панель'));
   if(!ADMIN_DATA){c.append(el('div',{class:'card muted center'},'Загрузка…'));return;}
   c.append(el('div',{class:'small muted',style:'margin:-8px 2px 12px'},
     `Токенов: ${ADMIN_DATA.totals.tokens} · Устройств: ${ADMIN_DATA.totals.devices}`));
+
+  // Successful ("успешно") payments summary
+  if(ADMIN_PAY){
+    const t=ADMIN_PAY.total||{count:0,sum:0};
+    const card=el('div',{class:'card'});
+    card.append(el('div',{class:'row between'},
+      el('div',{},el('b',{},'💸 Ушедшие платежи'),el('div',{class:'small muted'},'по которым пришло «успешно»')),
+      el('div',{style:'text-align:right'},el('div',{style:'font-size:19px;font-weight:800;color:var(--green-dark)'},money(t.sum)),
+        el('div',{class:'tiny muted'},`${t.count} шт.`))));
+    // per-token breakdown
+    if((ADMIN_PAY.byToken||[]).length){
+      const bt=el('div',{class:'hidden',style:'margin-top:8px;border-top:1px solid var(--line);padding-top:8px'});
+      ADMIN_PAY.byToken.forEach(x=>bt.append(el('div',{class:'kv',style:'margin-top:3px'},`${x.comment||x.tokenId}: `,el('b',{},money(x.sum)),` · ${x.count} шт.`)));
+      const recent=el('div',{class:'hidden',style:'margin-top:8px'});
+      (ADMIN_PAY.recent||[]).slice(0,100).forEach(r=>{
+        const d=new Date(r.at).toLocaleString('ru-RU');
+        recent.append(el('div',{class:'tiny',style:'margin-top:4px;color:var(--muted)'},`${d} · ${r.deviceName}: `,el('b',{style:'color:var(--ink)'},`${r.requisites}=${r.amount}`),r.tokenComment?` (${r.tokenComment})`:''));
+      });
+      const tgl=el('button',{class:'btn ghost small',textContent:'▾ Разбивка и последние',style:'margin-top:6px'});
+      tgl.onclick=()=>{const open=bt.classList.toggle('hidden')===false;recent.classList.toggle('hidden',!open);tgl.textContent=(open?'▴':'▾')+' Разбивка и последние';};
+      card.append(tgl,bt,recent);
+    }
+    c.append(card);
+  }
 
   // create token
   const comment=el('input',{type:'text',placeholder:'Кому выдан (комментарий)'});
@@ -600,6 +651,21 @@ function deletePaymentFlow(d,idx){
 function renderQr(container,text){try{const qr=qrcode(0,'M');qr.addData(text);qr.make();container.innerHTML=qr.createSvgTag({cellSize:6,margin:2,scalable:true});}catch(e){container.textContent='Не удалось построить QR';}}
 function timeToSec(v){if(!v)return 0;const p=v.split(':').map(Number);return (p[0]||0)*3600+(p[1]||0)*60+(p[2]||0);}
 function secToTime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;return [h,m,x].map(n=>String(n).padStart(2,'0')).join(':');}
+// Guaranteed hh:mm:ss selector (three number fields) — seconds work everywhere.
+function timeTriple(totalSec){
+  const clamp=(el,max)=>{el.oninput=()=>{el.value=el.value.replace(/[^0-9]/g,'').slice(0,2);};};
+  const h=el('input',{type:'number',inputmode:'numeric',min:'0',max:'23',class:'tnum',value:Math.floor(totalSec/3600)});
+  const m=el('input',{type:'number',inputmode:'numeric',min:'0',max:'59',class:'tnum',value:Math.floor((totalSec%3600)/60)});
+  const s=el('input',{type:'number',inputmode:'numeric',min:'0',max:'59',class:'tnum',value:totalSec%60});
+  const wrap=el('span',{class:'trow'},h,el('span',{class:'tsep'},':'),m,el('span',{class:'tsep'},':'),s);
+  wrap._get=()=>{
+    const H=Math.min(23,Math.max(0,parseInt(h.value,10)||0));
+    const M=Math.min(59,Math.max(0,parseInt(m.value,10)||0));
+    const S=Math.min(59,Math.max(0,parseInt(s.value,10)||0));
+    return H*3600+M*60+S;
+  };
+  return wrap;
+}
 
 // ---------- Live refresh (home only, does not disturb editing) ----------
 setInterval(async()=>{
