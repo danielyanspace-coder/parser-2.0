@@ -45,7 +45,7 @@ const RECIPIENT_NUMBER = String(process.env.RECIPIENT_NUMBER || '7878');
 const PAIRING_TTL_MS = parseInt(process.env.PAIRING_TTL_MS || String(10 * 60 * 1000), 10);
 const LONGPOLL_TIMEOUT_MS = parseInt(process.env.LONGPOLL_TIMEOUT_MS || '25000', 10);
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS || '15000', 10);
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://sms.alfa-vpn.ru').replace(/\/+$/, '');
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://project.alfa-vpn.ru').replace(/\/+$/, '');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');

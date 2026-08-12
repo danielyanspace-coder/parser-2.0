@@ -1,0 +1,18 @@
+# Android / Gradle build artifacts
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+
+# Android SDK (kept outside the repo anyway)
+/android-sdk/
+
+# Node
+node_modules/
+server/data/
+*.log
+
+# OS
+.DS_Store

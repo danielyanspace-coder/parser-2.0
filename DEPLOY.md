@@ -4,7 +4,7 @@
 существующего (ваш VPN, старый ALFA SMS) **не трогается** — новый сервис живёт
 на отдельном поддомене, отдельном порту и в отдельной папке.
 
-Итог: сервер на `https://sms.alfa-vpn.ru`, Telegram-бот с кнопкой мини-аппа,
+Итог: сервер на `https://project.alfa-vpn.ru`, Telegram-бот с кнопкой мини-аппа,
 админка только для вашего Telegram, и APK для телефонов.
 
 > На сервере у вас стоит Claude Code — можно просто дать ему этот файл и сказать
@@ -25,13 +25,13 @@
 
 ```
 Тип: A
-Имя (host): sms
+Имя (host): project
 Значение: <IP вашего сервера>
 ```
 
-Должно получиться `sms.alfa-vpn.ru`. Подождите 5–15 минут, проверьте:
+Должно получиться `project.alfa-vpn.ru`. Подождите 5–15 минут, проверьте:
 ```bash
-ping sms.alfa-vpn.ru
+ping project.alfa-vpn.ru
 ```
 (должен отвечать IP вашего сервера).
 
@@ -76,7 +76,7 @@ nano .env
 Заполните:
 - `ADMIN_PASSWORD` — придумайте сложный пароль (резервный вход в /admin).
 - `ADMIN_TG_ID` — оставьте `8211351879` (это вы).
-- `PUBLIC_BASE_URL` — `https://sms.alfa-vpn.ru`.
+- `PUBLIC_BASE_URL` — `https://project.alfa-vpn.ru`.
 - `PORT` — тот свободный порт из шага 4 (например `8090`).
 - `RECIPIENT_NUMBER` — `7878` (номер получателя платёжных SMS).
 - `TELEGRAM_BOT_TOKEN` — **пока оставьте пустым**, впишем на шаге 8.
@@ -104,23 +104,23 @@ curl http://127.0.0.1:8090/health   # ожидаем {"ok":true}
 
 ## Шаг 7. nginx + HTTPS (отдельный поддомен)
 ```bash
-sudo cp /opt/alfa-sms/server/deploy/nginx-sms.alfa-vpn.ru.conf /etc/nginx/sites-available/sms.alfa-vpn.ru
+sudo cp /opt/alfa-sms/server/deploy/nginx-project.alfa-vpn.ru.conf /etc/nginx/sites-available/project.alfa-vpn.ru
 # если порт не 8090 — поправьте proxy_pass:
-sudo nano /etc/nginx/sites-available/sms.alfa-vpn.ru
+sudo nano /etc/nginx/sites-available/project.alfa-vpn.ru
 
-sudo ln -s /etc/nginx/sites-available/sms.alfa-vpn.ru /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/project.alfa-vpn.ru /etc/nginx/sites-enabled/
 sudo nginx -t          # проверка синтаксиса — должно быть ok
 sudo systemctl reload nginx
 ```
 Выпустить сертификат (бесплатный):
 ```bash
 sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d sms.alfa-vpn.ru
+sudo certbot --nginx -d project.alfa-vpn.ru
 ```
 Certbot сам допишет HTTPS в конфиг. Проверьте в браузере:
-`https://sms.alfa-vpn.ru/health` → `{"ok":true}`.
+`https://project.alfa-vpn.ru/health` → `{"ok":true}`.
 
-> Мы добавили **новый** server-блок только для `sms.alfa-vpn.ru`. Конфиги вашего
+> Мы добавили **новый** server-блок только для `project.alfa-vpn.ru`. Конфиги вашего
 > основного сайта и VPN не изменялись.
 
 ---
@@ -136,7 +136,7 @@ Certbot сам допишет HTTPS в конфиг. Проверьте в бр�
    ```
 5. Привяжите мини-апп к боту: BotFather → `/mybots` → выберите бота →
    **Bot Settings → Menu Button → Configure menu button** → введите URL
-   `https://sms.alfa-vpn.ru/` и текст кнопки (например «Открыть панель»).
+   `https://project.alfa-vpn.ru/` и текст кнопки (например «Открыть панель»).
 
 Теперь у бота внизу есть кнопка, открывающая мини-апп.
 
@@ -148,7 +148,7 @@ Certbot сам допишет HTTPS в конфиг. Проверьте в бр�
 Зайдите, создайте первый токен: комментарий (кому), срок (дней) и количество
 устройств. Токен появится в списке.
 
-> Резервный вход в админку без Telegram: `https://sms.alfa-vpn.ru/admin`
+> Резервный вход в админку без Telegram: `https://project.alfa-vpn.ru/admin`
 > (логин `admin`, пароль из `ADMIN_PASSWORD`).
 
 ---
@@ -176,7 +176,7 @@ echo "sdk.dir=/путь/к/Android/Sdk" > local.properties
 установил → открыл → навёл на QR из мини-аппа → устройство привязалось.
 
 > Адрес сервера приложение берёт из QR-кода, поэтому отдельно его в APK
-> прописывать не нужно (по умолчанию и так `https://sms.alfa-vpn.ru`).
+> прописывать не нужно (по умолчанию и так `https://project.alfa-vpn.ru`).
 
 ---
 

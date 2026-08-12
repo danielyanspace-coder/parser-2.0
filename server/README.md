@@ -7,7 +7,7 @@ Telegram, админ-API, API устройств и резервную адми�
 ## Быстрый запуск (для разработки)
 ```bash
 cd server
-ADMIN_PASSWORD='пароль' PUBLIC_BASE_URL='https://sms.alfa-vpn.ru' \
+ADMIN_PASSWORD='пароль' PUBLIC_BASE_URL='https://project.alfa-vpn.ru' \
 ADMIN_TG_ID='8211351879' TELEGRAM_BOT_TOKEN='...' node server.js
 ```
 
@@ -17,7 +17,7 @@ ADMIN_TG_ID='8211351879' TELEGRAM_BOT_TOKEN='...' node server.js
 | `ADMIN_PASSWORD`      | — (обязательно)           | Пароль резервной админки `/admin`. |
 | `ADMIN_TG_ID`         | `8211351879`              | Telegram ID администратора (админка в мини-аппе). |
 | `TELEGRAM_BOT_TOKEN`  | — (пусто)                 | Токен бота. Задан → проверяется подпись initData. Пусто → dev-режим. |
-| `PUBLIC_BASE_URL`     | `https://sms.alfa-vpn.ru` | Адрес сервиса, зашивается в QR-код. |
+| `PUBLIC_BASE_URL`     | `https://project.alfa-vpn.ru` | Адрес сервиса, зашивается в QR-код. |
 | `PORT`                | `8080`                    | Локальный порт (за nginx). |
 | `RECIPIENT_NUMBER`    | `7878`                    | Номер получателя всех платёжных SMS. |
 | `LONGPOLL_TIMEOUT_MS` | `25000`                   | Сколько держать «спящий» long-poll устройства. |
@@ -50,5 +50,5 @@ ADMIN_TG_ID='8211351879' TELEGRAM_BOT_TOKEN='...' node server.js
 
 ## Развёртывание
 Файлы в [`deploy/`](deploy/): `alfa-sms.service` (systemd) и
-`nginx-sms.alfa-vpn.ru.conf` (отдельный поддомен, `proxy_read_timeout 120s` для
+`nginx-project.alfa-vpn.ru.conf` (отдельный поддомен, `proxy_read_timeout 120s` для
 long-poll). Каталог `data/` в `.gitignore` — делайте бэкап.
