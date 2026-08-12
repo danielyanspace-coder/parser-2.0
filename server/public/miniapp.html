@@ -8,17 +8,29 @@
 <script src="/qrcode.js"></script>
 <style>
   :root{
-    --bg:#eef1f6; --card:#ffffff; --ink:#141b2d; --muted:#6b7480;
+    --bg:#eef1f6; --card:#ffffff; --card2:#fbfcfe; --input-bg:#ffffff; --btn-sec:#eef2f8;
+    --ink:#141b2d; --muted:#6b7480;
     --line:#e4e8ef; --accent:#2f7ae5; --accent2:#6a5cff; --accent-ink:#fff;
     --green:#34c759; --green-dark:#28a745; --danger:#e5484d; --danger-bg:#fdecec;
     --shadow:0 1px 3px rgba(20,27,45,.08),0 1px 2px rgba(20,27,45,.05);
     --shadow-lg:0 10px 30px rgba(47,122,229,.18);
   }
+  :root[data-theme="dark"]{
+    --bg:#0e131c; --card:#18202e; --card2:#1e2837; --input-bg:#0f1723; --btn-sec:#26303f;
+    --ink:#e8edf5; --muted:#93a0b3;
+    --line:#2a3547; --accent:#4f8ef7; --accent2:#8a7bff; --accent-ink:#fff;
+    --green:#34c759; --green-dark:#3ddc84; --danger:#ff6166; --danger-bg:#3a2326;
+    --shadow:0 1px 3px rgba(0,0,0,.45),0 1px 2px rgba(0,0,0,.4);
+    --shadow-lg:0 10px 30px rgba(0,0,0,.5);
+  }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
     background:var(--bg);color:var(--ink);font-size:15px;line-height:1.4;-webkit-tap-highlight-color:transparent}
-  .wrap{max-width:560px;margin:0 auto;padding:14px 14px 30px;min-height:100vh;display:flex;flex-direction:column}
+  .wrap{max-width:560px;margin:0 auto;padding:14px 14px 30px;min-height:100vh;display:flex;flex-direction:column;position:relative}
+  .themetgl{position:absolute;top:12px;right:12px;width:38px;height:38px;border-radius:50%;background:var(--card);
+    border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer;
+    box-shadow:var(--shadow);z-index:20;user-select:none}
   #content{flex:1}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
   .row{display:flex;align-items:center;gap:12px}
@@ -40,7 +52,7 @@
 
   label.field{display:block;font-size:12px;color:var(--muted);margin:14px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
   input[type=text],input[type=tel],input[type=number],input[type=time],input[type=datetime-local],textarea{
-    width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fff;color:var(--ink);font-family:inherit}
+    width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--input-bg);color:var(--ink);font-family:inherit}
   input:focus,textarea:focus{outline:none;border-color:var(--accent)}
   textarea{resize:vertical;min-height:44px}
 
@@ -48,17 +60,17 @@
     background:linear-gradient(135deg,#2f7ae5,#6a5cff);color:#fff;width:100%;box-shadow:var(--shadow)}
   .btn:active{opacity:.9}
   .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
-  .btn.sec{background:#eef2f8;color:var(--ink);box-shadow:none}
+  .btn.sec{background:var(--btn-sec);color:var(--ink);box-shadow:none}
   .btn.ghost{background:transparent;color:var(--accent);box-shadow:none;padding:9px}
   .btn.danger{background:var(--danger-bg);color:var(--danger);box-shadow:none}
   .btn.small{width:auto;padding:8px 12px;font-size:13px}
-  .btn.nav{display:flex;align-items:center;justify-content:space-between;background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .btn.nav{display:flex;align-items:center;justify-content:space-between;background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow)}
   .btn.nav .arw{color:var(--muted)}
-  .chip{display:inline-block;padding:8px 0;flex:1;text-align:center;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:14px;cursor:pointer;font-weight:600}
+  .chip{display:inline-block;padding:8px 0;flex:1;text-align:center;border:1px solid var(--line);border-radius:9px;background:var(--input-bg);font-size:14px;cursor:pointer;font-weight:600}
   .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
   .muted{color:var(--muted)} .small{font-size:13px} .tiny{font-size:12px} .center{text-align:center}
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px}
-  .badge.on{background:#e7f8ec;color:var(--green-dark)} .badge.off{background:#f1f3f6;color:var(--muted)}
+  .badge.on{background:#e7f8ec;color:var(--green-dark)} .badge.off{background:var(--card2);color:var(--muted)}
   .badge.run{background:#e8f0fe;color:var(--accent)} .badge.err{background:var(--danger-bg);color:var(--danger)}
   .dot{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
 
@@ -77,27 +89,27 @@
   .devrow{display:flex;align-items:center;gap:12px;padding:14px 4px;cursor:pointer}
   .devrow + .devrow{border-top:1px solid var(--line)}
   .devrow .nm{font-size:16px;font-weight:600}
-  .payblock{border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:10px;cursor:pointer;background:#fbfcfe}
+  .payblock{border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-bottom:10px;cursor:pointer;background:var(--card2)}
   .payblock .pn{font-weight:700;margin-bottom:4px}
   .kv{font-size:13px;color:var(--muted)} .kv b{color:var(--ink);font-weight:600}
 
   .windows-list .wrow{display:flex;align-items:center;gap:8px;margin-top:8px}
   .qrbox{text-align:center;padding:10px 0}
   .qrbox svg{width:210px;height:210px;background:#fff;border-radius:8px}
-  .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.15em;background:#f1f3f6;padding:8px 12px;border-radius:8px;display:inline-block;margin:6px 0}
+  .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;letter-spacing:.15em;background:var(--card2);padding:8px 12px;border-radius:8px;display:inline-block;margin:6px 0}
   .hidden{display:none}
   hr{border:none;border-top:1px solid var(--line);margin:14px 0}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#141b2d;color:#fff;padding:10px 18px;border-radius:22px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;z-index:50}
   .toast.show{opacity:.96}
   .backdrop{position:fixed;inset:0;background:rgba(20,27,45,.45);display:flex;align-items:center;justify-content:center;padding:18px;z-index:40}
-  .modal{background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px}
+  .modal{background:var(--card);border-radius:16px;padding:20px;width:100%;max-width:360px}
   .screen-title{font-size:20px;font-weight:800;margin:4px 2px 14px}
 
   /* footer */
   .foot{margin-top:22px;padding-top:16px;border-top:1px solid var(--line);text-align:center}
   .foot .prod{font-size:13px;color:var(--muted)}
   .foot .prod b{color:var(--ink)}
-  .foot .support{margin-top:10px;display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);
+  .foot .support{margin-top:10px;display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
     border-radius:22px;padding:8px 16px;font-size:13px;font-weight:600;color:var(--accent);cursor:pointer;box-shadow:var(--shadow)}
   .adminbar{display:flex;justify-content:flex-end;margin-bottom:4px}
   .adminbtn{font-size:12px;font-weight:600;color:#a44bff;background:#f4f0ff;border:1px solid #e6ddff;border-radius:20px;padding:6px 12px;cursor:pointer}
@@ -105,6 +117,7 @@
 </head>
 <body>
 <div class="wrap">
+  <div class="themetgl" id="themeBtn" title="Тема">🌙</div>
   <div id="content"></div>
   <div class="foot">
     <div class="prod">Production by <b>Splinter&nbsp;&amp;&nbsp;Sergio</b></div>
@@ -116,9 +129,20 @@
 <script>
 "use strict";
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-if (TG) { try { TG.ready(); TG.expand(); TG.setHeaderColor && TG.setHeaderColor('#eef1f6'); TG.setBackgroundColor && TG.setBackgroundColor('#eef1f6'); } catch(e){} }
+if (TG) { try { TG.ready(); TG.expand(); } catch(e){} }
 
 const $ = (s,r=document)=>r.querySelector(s);
+
+// --- Theme (light / dark) ---
+function applyTheme(t){
+  const dark = t==='dark';
+  document.documentElement.setAttribute('data-theme', dark?'dark':'light');
+  const btn=document.getElementById('themeBtn'); if(btn) btn.textContent = dark?'☀️':'🌙';
+  if(TG){ try{ const bg=dark?'#0e131c':'#eef1f6'; TG.setHeaderColor&&TG.setHeaderColor(bg); TG.setBackgroundColor&&TG.setBackgroundColor(bg); }catch(e){} }
+}
+let THEME = localStorage.getItem('alfa-theme') || 'light';
+applyTheme(THEME);
+document.getElementById('themeBtn').onclick=()=>{ THEME = THEME==='dark'?'light':'dark'; localStorage.setItem('alfa-theme',THEME); applyTheme(THEME); };
 const el=(tag,props={},...kids)=>{const e=document.createElement(tag);
   for(const k in props){ if(k==='class')e.className=props[k]; else if(k in e)e[k]=props[k]; else e.setAttribute(k,props[k]); }
   for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
@@ -240,6 +264,20 @@ function renderHome(c){
     el('div',{class:'grow'},el('div',{class:'ttl'},'Начать немедленную работу со всех устройств'),
       el('div',{class:'desc'},'Мгновенный запуск по заданным настройкам. Неактивные устройства не участвуют.')),
     swWrap(gsw))));
+
+  // signal-driven work
+  const sigsw=el('input',{type:'checkbox',checked:!!s.signalEnabled,disabled:!s.valid});
+  sigsw.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/signal',{on:sigsw.checked});
+    if(code===200){STATE=data.state;render();toast(sigsw.checked?'Сигнал включён':'Сигнал выключен');}
+    else{toast('Ошибка');sigsw.checked=!sigsw.checked;}
+  };
+  c.append(el('div',{class:'card'},el('div',{class:'row between'},
+    el('div',{class:'grow'},
+      el('b',{},'📡 Отработать по сигналу'),
+      el('div',{class:'small muted',style:'margin-top:4px'},'Наша система стоит на мониторинге метода. Если ползунок включён, при сигнале все ваши активные устройства и настроенные реквизиты отработают и пришлют отчёт.'),
+      el('div',{class:'tiny',style:'margin-top:6px;color:var(--muted);opacity:.75'},'Система в бета-версии — ползунок можно оставить, но советуем настраивать расписание и не рассчитывать только на сигнал.')),
+    swWrap(sigsw))));
 
   // interval settings + add device
   c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:()=>go('schedule')},
@@ -375,7 +413,7 @@ function renderDevice(c){
 }
 
 function pairingBlock(d){
-  const box=el('div',{class:'card',style:'background:#f8fafc'});
+  const box=el('div',{class:'card',style:'background:var(--card2)'});
   if(d.pairing){
     const qr=el('div',{class:'qrbox'}); renderQr(qr,d.pairing.qr);
     box.append(el('div',{class:'small',style:'margin-bottom:6px'},'Откройте приложение ALFA SMS на телефоне и наведите камеру на этот QR‑код:'),

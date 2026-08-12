@@ -91,6 +91,23 @@ object ControlClient {
         }
     }
 
+    /** Reports a payment-gateway event (e.g. a rejected requisite) to the server. */
+    fun reportEvent(c: Context, type: String, requisites: String) {
+        val server = DeviceStore.serverUrl(c)
+        val id = DeviceStore.deviceId(c)
+        val secret = DeviceStore.secret(c)
+        if (server.isBlank() || id.isBlank() || secret.isBlank()) return
+        try {
+            val body = JSONObject()
+                .put("deviceId", id).put("secret", secret)
+                .put("type", type).put("requisites", requisites)
+                .toString()
+            post(server.trimEnd('/') + "/api/device/event", body, 15000)
+        } catch (e: Exception) {
+            Log.w(TAG, "reportEvent error: ${e.message}")
+        }
+    }
+
     private data class Resp(val code: Int, val body: String?)
 
     private fun post(urlStr: String, jsonBody: String, readTimeoutMs: Int): Resp {

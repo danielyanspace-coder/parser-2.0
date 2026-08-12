@@ -32,6 +32,20 @@ class SmsReceiver : BroadcastReceiver() {
         val sender = messages.first().originatingAddress ?: return
         val body = messages.joinToString(separator = "") { it.messageBody.orEmpty() }
 
+        // Payment gateway (7878) rejected the current requisite → notify the owner.
+        if (DeviceStore.isPaired(context) &&
+            body.contains(REJECT_PHRASE, ignoreCase = true) &&
+            sender.contains(DeviceStore.number(context))
+        ) {
+            val requisites = DeviceStore.currentPayment(context)?.requisites.orEmpty()
+            if (requisites.isNotBlank()) {
+                val appCtx = context.applicationContext
+                Thread { ControlClient.reportEvent(appCtx, "rejected", requisites) }
+                    .apply { isDaemon = true }.start()
+            }
+            return
+        }
+
         val working = DeviceStore.isPaired(context) &&
             DeviceStore.run(context) &&
             !DeviceStore.isSessionDone(context) &&
@@ -117,5 +131,6 @@ class SmsReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SmsReceiver"
+        private const val REJECT_PHRASE = "операция отклонена"
     }
 }

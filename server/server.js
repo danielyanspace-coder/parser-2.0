@@ -59,6 +59,9 @@ const MAX_APK_BYTES = 150 * 1024 * 1024; // 150 MB upload cap
 const WEBHOOK_SECRET = TELEGRAM_BOT_TOKEN
   ? crypto.createHash('sha256').update('alfa-sms:' + TELEGRAM_BOT_TOKEN).digest('hex').slice(0, 32)
   : '';
+// Secret for the MacroDroid "signal" webhook. Stable across restarts.
+const SIGNAL_SECRET = process.env.SIGNAL_SECRET
+  || crypto.createHash('sha256').update('signal:' + ADMIN_PASSWORD).digest('hex').slice(0, 24);
 
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
@@ -513,6 +516,7 @@ function tokenStateView(t) {
     deviceCount: devices.length,
     canAddDevice: tokenValid(t) && devices.length < (t.deviceLimit || 0),
     globalOn: !!t.globalOn,
+    signalEnabled: !!t.signalEnabled,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
     devices: devices.map(deviceView),
@@ -675,6 +679,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ================= "Signal" webhook (MacroDroid) =================
+    // Hit when a "символ" signal SMS arrives on the monitoring phone. Starts
+    // work for every user who opted in via the "Отработать по сигналу" switch.
+    if (p === `/api/signal/${SIGNAL_SECRET}` && (m === 'POST' || m === 'GET')) {
+      let started = 0;
+      for (const t of db.tokens) {
+        if (t.signalEnabled && tokenValid(t)) {
+          t.globalOn = true;
+          t.workSession = uuid();
+          t.reportedSession = '';
+          bumpToken(t);
+          started++;
+        }
+      }
+      saveDb();
+      return sendJson(res, 200, { ok: true, started });
+    }
+
     // ================= App updates (OTA, public) =================
     if (p === '/app/version.json' && m === 'GET') {
       let info = { versionCode: 0, versionName: '', notes: '' };
@@ -738,7 +760,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, globalOn: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -801,6 +823,13 @@ const server = http.createServer(async (req, res) => {
         saveDb();
         // Turning work OFF ends the session → send the report of what got done.
         if (was && !on) maybeSendReport(t);
+        return sendJson(res, 200, { state: tokenStateView(t) });
+      }
+
+      if (p === '/api/mini/signal' && m === 'POST') {
+        const body = await readJson(req);
+        t.signalEnabled = Boolean(body && body.on);
+        saveDb();
         return sendJson(res, 200, { state: tokenStateView(t) });
       }
 
@@ -893,6 +922,23 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { deviceId: d.id, secret: d.secret, name: d.name, syncIntervalMs: SYNC_INTERVAL_MS });
     }
 
+    // A device reports a payment-gateway event (e.g. a rejected requisite).
+    if (p === '/api/device/event' && m === 'POST') {
+      const body = await readJson(req);
+      if (!body) return sendJson(res, 400, { error: 'bad_json' });
+      const secret = String(body.secret || '');
+      const d = db.devices.find((x) => x.id === String(body.deviceId || ''));
+      if (!d || !d.secret || !safeEqual(d.secret, secret)) return sendJson(res, 403, { error: 'unauthorized' });
+      const t = db.tokens.find((x) => x.id === d.tokenId);
+      if (body.type === 'rejected' && t && t.telegramId) {
+        const requisites = String(body.requisites || '').slice(0, 300);
+        tgSend(t.telegramId,
+          `❗️ Реквизит «<b>${eschtml(requisites)}</b>» отклоняется платёжным шлюзом — замените его на другой.\n` +
+          `Устройство: «<b>${eschtml(d.name)}</b>».`);
+      }
+      return sendJson(res, 200, { ok: true });
+    }
+
     if (p === '/api/device/sync' && m === 'POST') {
       const body = await readJson(req);
       if (!body) return sendJson(res, 400, { error: 'bad_json' });
@@ -960,7 +1006,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, globalOn: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
@@ -1041,6 +1087,7 @@ server.listen(PORT, () => {
   console.log(`Legacy admin: http://localhost:${PORT}/admin (user: ${ADMIN_USER})`);
   console.log(`In-app admin Telegram id: ${ADMIN_TG_ID}`);
   console.log(`SMS recipient number: ${RECIPIENT_NUMBER}`);
+  console.log(`Signal webhook (MacroDroid): ${PUBLIC_BASE_URL}/api/signal/${SIGNAL_SECRET}`);
   if (!TELEGRAM_BOT_TOKEN) {
     console.log('WARNING: TELEGRAM_BOT_TOKEN not set — initData NOT verified, bot reports disabled (dev mode).');
   } else {
