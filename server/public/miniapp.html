@@ -358,7 +358,10 @@ function renderDevice(c){
   const box=el('div',{class:'card'});
   (d.payments||[]).forEach((p,i)=>{
     const block=el('div',{class:'payblock'});
-    block.append(el('div',{class:'pn'},p.name||('Платеж '+(i+1))),
+    const del=el('button',{class:'btn ghost small',textContent:'✕',style:'color:var(--danger);padding:2px 8px'});
+    del.onclick=(e)=>{ e.stopPropagation(); deletePaymentFlow(d,i); };
+    block.append(
+      el('div',{class:'row between'},el('div',{class:'pn'},p.name||('Платеж '+(i+1))),del),
       el('div',{class:'kv'},'Реквизиты: ',el('b',{},p.requisites||'—')),
       el('div',{class:'kv'},'Сумма: ',el('b',{},p.amount||'—')),
       el('div',{class:'kv'},p.multiple?`Количество платежей: `:'Один платёж',p.multiple?el('b',{},String(p.count)):null));
@@ -396,7 +399,9 @@ function renderPayment(c){
   c.append(el('div',{class:'screen-title'},isNew?'Новый платёж':(existing.name||'Платёж')));
 
   const req=el('textarea',{value:existing?existing.requisites:'',placeholder:'Реквизиты'});
-  const amt=el('textarea',{value:existing?existing.amount:'',placeholder:'Сумма'});
+  const amt=el('input',{type:'text',inputmode:'decimal',value:existing?existing.amount:'',placeholder:'Только число, напр. 5000'});
+  // Keep the amount field numeric: digits and at most one decimal separator.
+  amt.oninput=()=>{ let v=amt.value.replace(/,/g,'.').replace(/[^0-9.]/g,''); const i=v.indexOf('.'); if(i!==-1)v=v.slice(0,i+1)+v.slice(i+1).replace(/\./g,''); amt.value=v; };
   const multi=el('input',{type:'checkbox',checked:existing?!!existing.multiple:false});
   const countWrap=el('div',{});
   const count=el('input',{type:'number',min:'1',value:existing&&existing.multiple?existing.count:2});
@@ -406,10 +411,14 @@ function renderPayment(c){
 
   const save=el('button',{class:'btn',textContent:'Сохранить',style:'margin-top:18px'});
   save.onclick=async()=>{
+    const requisites=req.value.trim();
+    const amount=amt.value.trim().replace(',', '.');
+    if(!requisites){toast('Заполните реквизиты');req.focus();return;}
+    if(!/^\d+(\.\d+)?$/.test(amount)||parseFloat(amount)<=0){toast('Сумма — только положительное число');amt.focus();return;}
     const block={
       id:existing?existing.id:undefined,
       name:existing?existing.name:('Платеж '+((d.payments||[]).length+1)),
-      requisites:req.value, amount:amt.value, multiple:multi.checked,
+      requisites, amount, multiple:multi.checked,
       count:multi.checked?Math.max(1,parseInt(count.value,10)||1):1,
     };
     const payments=(d.payments||[]).slice();
@@ -417,7 +426,10 @@ function renderPayment(c){
     save.disabled=true;save.textContent='Сохранение…';
     const {code,data}=await api('POST',`/api/mini/device/${d.id}/payments`,{payments});
     save.disabled=false;save.textContent='Сохранить';
-    if(code===200){STATE=data.state;toast('Сохранено');back();}else toast('Ошибка сохранения');
+    if(code===200){STATE=data.state;toast('Сохранено');back();}
+    else if(data.error==='invalid_amount')toast('Сумма — только число');
+    else if(data.error==='empty_requisites')toast('Заполните реквизиты');
+    else toast('Ошибка сохранения');
   };
 
   const card=el('div',{class:'card'},
@@ -489,6 +501,21 @@ function adminTokenCard(t){
     t.telegramId?el('button',{class:'btn sec small',textContent:'Отвязать TG',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/unbind`,{});if(code===200){await loadAdmin();render();toast('Отвязано');}}}):null,
     el('button',{class:'btn danger small',textContent:'Удалить',onclick:()=>confirmAction(`Удалить токен «${t.comment||t.value}» и все его устройства?`,async()=>{const {code}=await api('DELETE',`/api/admin/token/${t.id}`);if(code===200){await loadAdmin();render();toast('Удалено');}})}));
   card.append(act);
+
+  // Expandable: schedule (по чему начинается работа) + each device's payments.
+  const details=el('div',{class:'hidden',style:'margin-top:10px;border-top:1px solid var(--line);padding-top:8px'});
+  const sc=t.schedule||{};
+  const winTxt=(sc.windows&&sc.windows.length)?sc.windows.map(w=>secToTime(w.startSec)+'–'+secToTime(w.endSec)).join(', '):'нет';
+  details.append(el('div',{class:'kv'},'📅 Расписание: ',
+    el('b',{},`интервал ${sc.intervalSec||'—'}с`),`, окна: `,el('b',{},winTxt),
+    sc.repeatDaily?', ежедневно':'', sc.startAtMillis?(', старт '+new Date(sc.startAtMillis).toLocaleString('ru-RU')):''));
+  (t.devices||[]).forEach(d=>{
+    const pays=(d.payments||[]).map(p=>`${p.requisites}=${p.amount}`+(p.multiple?`×${p.count}`:'')).join('; ')||'нет платежей';
+    details.append(el('div',{class:'kv',style:'margin-top:5px'},`📱 ${d.name}${d.active?'':' (неактивно)'}: `,el('b',{},pays)));
+  });
+  const toggle=el('button',{class:'btn ghost small',textContent:'▾ Расписание и платежи',style:'margin-top:6px'});
+  toggle.onclick=()=>{const open=details.classList.toggle('hidden')===false;toggle.textContent=(open?'▴':'▾')+' Расписание и платежи';};
+  card.append(toggle,details);
   return card;
 }
 
@@ -526,6 +553,15 @@ function deleteDeviceFlow(d){
   confirmAction(`Удалить устройство «${d.name}»?`,async()=>{
     const {code,data}=await api('DELETE',`/api/mini/device/${d.id}`);
     if(code===200){STATE=data.state;toast('Устройство удалено');reset('home');}else toast('Ошибка');
+  });
+}
+
+function deletePaymentFlow(d,idx){
+  const p=(d.payments||[])[idx];
+  confirmAction(`Удалить «${(p&&p.name)||'платёж'}»?`,async()=>{
+    const payments=(d.payments||[]).slice(); payments.splice(idx,1);
+    const {code,data}=await api('POST',`/api/mini/device/${d.id}/payments`,{payments});
+    if(code===200){STATE=data.state;render();toast('Платёж удалён');}else toast('Ошибка');
   });
 }
 

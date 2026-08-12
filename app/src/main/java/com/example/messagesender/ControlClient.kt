@@ -59,6 +59,8 @@ object ControlClient {
             .put("paymentIndex", DeviceStore.paymentIndex(c))
             .put("triggerCount", DeviceStore.triggerCount(c))
             .put("paused", DeviceStore.isPaused(c))
+            .put("done", DeviceStore.isSessionDone(c))
+            .put("workSession", DeviceStore.workSession(c))
             .put("lastError", SenderStatus.lastError ?: JSONObject.NULL)
         val body = JSONObject()
             .put("deviceId", id)

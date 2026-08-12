@@ -133,7 +133,7 @@ class SenderService : Service() {
         val payment = DeviceStore.currentPayment(this)
         if (payment == null || payment.message().isBlank()) {
             // No (more) payment blocks to send.
-            DeviceStore.setSessionDone(this, true)
+            finishSession()
             reschedule(IDLE_MS)
             return
         }
@@ -154,7 +154,7 @@ class SenderService : Service() {
             if (windows.isNotEmpty() && !DeviceStore.repeatDaily(this) &&
                 ScheduleWindows.pastAllWindowsToday(windows, now)
             ) {
-                DeviceStore.setSessionDone(this, true)
+                finishSession()
                 reschedule(IDLE_MS)
                 return
             }
@@ -164,6 +164,14 @@ class SenderService : Service() {
 
     private fun reschedule(delayMs: Long) {
         if (!stopping) scheduleTick(delayMs)
+    }
+
+    /** Marks the session finished and pushes status so the server can report. */
+    private fun finishSession() {
+        if (DeviceStore.isSessionDone(this)) return
+        DeviceStore.setSessionDone(this, true)
+        updateNotification()
+        Thread { ControlClient.sync(this, waitForChange = false) }.apply { isDaemon = true }.start()
     }
 
     private fun sendOnce(payment: Payment) {

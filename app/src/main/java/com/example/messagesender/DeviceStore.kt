@@ -96,6 +96,7 @@ object DeviceStore {
     fun active(c: Context) = p(c).getBoolean(K_ACTIVE, false)
     fun globalOn(c: Context) = p(c).getBoolean(K_GLOBAL, false)
     fun tokenValid(c: Context) = p(c).getBoolean(K_TOKEN_VALID, false)
+    fun workSession(c: Context) = p(c).getString(K_WORK_SESSION, "").orEmpty()
 
     // --- Config ---
     fun number(c: Context) = p(c).getString(K_NUMBER, "7878").orEmpty().ifBlank { "7878" }

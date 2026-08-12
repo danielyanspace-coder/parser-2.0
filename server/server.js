@@ -25,6 +25,7 @@
  */
 
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -50,6 +51,14 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://project.alfa-vp
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const APK_FILE = path.join(DATA_DIR, 'alfa-sms.apk');
+const UPDATE_FILE = path.join(DATA_DIR, 'update.json');
+const MAX_APK_BYTES = 150 * 1024 * 1024; // 150 MB upload cap
+
+// Stable per-bot webhook secret (path + Telegram secret_token header).
+const WEBHOOK_SECRET = TELEGRAM_BOT_TOKEN
+  ? crypto.createHash('sha256').update('alfa-sms:' + TELEGRAM_BOT_TOKEN).digest('hex').slice(0, 32)
+  : '';
 
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
@@ -73,7 +82,7 @@ function loadDb() {
     db.devices = db.devices || [];
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
-    for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [defaultPayment('Платеж')];
+    for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
     console.error('Failed to read db.json, starting empty:', e.message);
@@ -182,25 +191,51 @@ function sanitizeSchedule(input) {
 // A payment block: requisites (message part 1) + amount (message part 2), and
 // optionally repeated N times ("несколько платежей на этот реквизит с той же
 // суммой"). Each repeat is one символ→Ок→успешно cycle.
-function defaultPayment(name) {
-  return { id: uuid(), name: name || 'Платеж', requisites: '', amount: '', multiple: false, count: 1 };
+// Normalizes a money amount to a canonical numeric string ("1 234,50" -> "1234.50").
+function normalizeAmount(raw) {
+  const s = String(raw == null ? '' : raw).trim().replace(/\s+/g, '').replace(',', '.');
+  return s;
 }
+function isNumericAmount(raw) {
+  const s = normalizeAmount(raw);
+  return s.length > 0 && /^\d+(\.\d+)?$/.test(s) && parseFloat(s) > 0;
+}
+function amountValue(raw) {
+  const s = normalizeAmount(raw);
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+// Money formatting for reports: 1234.5 -> "1 234,5".
+function fmtMoney(n) {
+  const s = (Math.round(n * 100) / 100).toString().replace('.', ',');
+  return s.replace(/\B(?=(\d{3})+(?![\d,]))/g, ' ');
+}
+
+// Sanitizes an incoming payments array. Empty/absent -> [] (device unconfigured).
 function sanitizePayments(input) {
-  if (!Array.isArray(input)) return [defaultPayment('Платеж')];
-  const list = input.slice(0, 50).map((p, i) => {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, 50).map((p, i) => {
     const multiple = Boolean(p && p.multiple);
     let count = parseInt(p && p.count, 10);
     if (!Number.isFinite(count) || count < 1) count = 1;
     return {
       id: (p && p.id) ? String(p.id).slice(0, 40) : uuid(),
-      name: String((p && p.name) || (i === 0 ? 'Платеж' : `Платеж ${i + 1}`)).slice(0, 40),
-      requisites: String((p && p.requisites) || '').slice(0, 1000),
-      amount: String((p && p.amount) || '').slice(0, 1000),
+      name: i === 0 ? 'Платеж' : `Платеж ${i + 1}`,
+      requisites: String((p && p.requisites) || '').trim().slice(0, 1000),
+      amount: normalizeAmount(p && p.amount).slice(0, 32),
       multiple,
       count: multiple ? Math.min(count, 100000) : 1,
     };
   });
-  return list.length ? list : [defaultPayment('Платеж')];
+}
+// Validates payments: each block needs non-empty requisites and a numeric amount.
+// Returns null if OK, or an error code string.
+function validatePayments(list) {
+  for (const p of list) {
+    if (!p.requisites) return 'empty_requisites';
+    if (!isNumericAmount(p.amount)) return 'invalid_amount';
+  }
+  return null;
 }
 // The message actually sent for a payment: requisites + " " + amount.
 function paymentMessage(p) {
@@ -259,6 +294,192 @@ function finishSync(res, d, secret) {
   d.lastSeen = now();
   saveDbSoon();
   return sendJson(res, 200, buildSyncPayload(d, t));
+}
+
+// ---------------------------------------------------------------------------
+// Telegram Bot API (reports + "Доработать" flow)
+// ---------------------------------------------------------------------------
+
+function tgApi(method, params) {
+  return new Promise((resolve) => {
+    if (!TELEGRAM_BOT_TOKEN) return resolve(null);
+    const body = JSON.stringify(params || {});
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      path: `/bot${TELEGRAM_BOT_TOKEN}/${method}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (r) => {
+      let d = '';
+      r.on('data', (c) => (d += c));
+      r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { resolve(null); } });
+    });
+    req.on('error', (e) => { console.error('tgApi error:', e.message); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+function tgSend(chatId, text, keyboard) {
+  const params = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true };
+  if (keyboard) params.reply_markup = { inline_keyboard: keyboard };
+  return tgApi('sendMessage', params);
+}
+function tgAnswerCallback(id, text) {
+  return tgApi('answerCallbackQuery', { callback_query_id: id, text: text || '' });
+}
+function eschtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+// --- Report computation ---
+
+// Per-device outcome for the current work session, from its reported progress.
+function computeDeviceReport(d, t) {
+  const P = d.payments || [];
+  const same = d.status && d.status.workSession && d.status.workSession === t.workSession;
+  const idx = same ? (d.status.paymentIndex || 0) : 0;
+  const tc = same ? (d.status.triggerCount || 0) : 0;
+  let executed = 0, target = 0;
+  P.forEach((p, i) => {
+    const amt = amountValue(p.amount);
+    const cnt = p.multiple ? Math.max(1, p.count) : 1;
+    target += amt * cnt;
+    const done = i < idx ? cnt : (i === idx ? Math.min(tc, cnt) : 0);
+    executed += amt * done;
+  });
+  return { name: d.name, executed, target, remaining: Math.max(0, target - executed) };
+}
+
+// Devices that took part in the session (paired, active, have payments).
+function participatingDevices(t) {
+  return tokenDevices(t.id).filter((d) => d.pairedAt && d.active && (d.payments || []).length > 0);
+}
+function sessionComplete(t) {
+  if (!t.globalOn || !t.workSession) return false;
+  const parts = participatingDevices(t);
+  if (parts.length === 0) return false;
+  return parts.every((d) => d.status && d.status.workSession === t.workSession && d.status.done);
+}
+
+function buildReportMessage(t) {
+  const parts = participatingDevices(t);
+  let totalExec = 0, totalTarget = 0, totalRem = 0;
+  const lines = parts.map((d) => {
+    const r = computeDeviceReport(d, t);
+    totalExec += r.executed; totalTarget += r.target; totalRem += r.remaining;
+    const mark = r.remaining <= 0 ? '🟢' : (r.executed > 0 ? '🟡' : '🔴');
+    return `${mark} <b>${eschtml(r.name)}</b>\n` +
+      `   🟢 Отправлено: <b>${fmtMoney(r.executed)}</b>\n` +
+      `   🎯 Задача: <b>${fmtMoney(r.target)}</b>\n` +
+      `   🔴 Не отработано: <b>${fmtMoney(r.remaining)}</b>`;
+  });
+  const header = totalRem <= 0
+    ? '✅ <b>Работа завершена — всё отработано!</b>'
+    : '📊 <b>Отчёт по работе устройств</b>';
+  const body = lines.length ? lines.join('\n\n') : 'Нет устройств с настроенными платежами.';
+  const totals =
+    `\n\n━━━━━━━━━━━━━━\n` +
+    `Σ Отправлено: <b>${fmtMoney(totalExec)}</b>\n` +
+    `Σ Задача: <b>${fmtMoney(totalTarget)}</b>\n` +
+    `Σ Не отработано: <b>${fmtMoney(totalRem)}</b>`;
+  const note = totalRem > 0
+    ? `\n\n💡 Чтобы доработать платежи, которые не были исполнены, нажмите кнопку ниже. ` +
+      `Затем выставьте расписание — система сама уберёт уже отработанные платежи и настроит работу до опустошения балансов.`
+    : '';
+  const text = `${header}\n\n${body}${totals}${note}`;
+  const keyboard = totalRem > 0 ? [[{ text: '🔧 Доработать', callback_data: `rw:${t.id}` }]] : null;
+  return { text, keyboard };
+}
+
+// Sends the report once per work session to the token's Telegram user.
+function maybeSendReport(t) {
+  if (!t || !t.telegramId || !t.workSession) return;
+  if (t.reportedSession === t.workSession) return;
+  t.reportedSession = t.workSession;
+  saveDb();
+  const msg = buildReportMessage(t);
+  tgSend(t.telegramId, msg.text, msg.keyboard);
+}
+
+// --- "Доработать": strip executed payments, keep only unexecuted ones ---
+
+function reworkToken(t) {
+  for (const d of tokenDevices(t.id)) {
+    const P = d.payments || [];
+    if (P.length === 0) continue;
+    const same = d.status && d.status.workSession && d.status.workSession === t.workSession;
+    if (!same) continue; // device didn't run this session — leave it untouched
+    const idx = d.status.paymentIndex || 0;
+    const tc = d.status.triggerCount || 0;
+    const next = [];
+    P.forEach((p, i) => {
+      if (i < idx) return; // fully executed → drop
+      if (i === idx) {
+        const cnt = p.multiple ? Math.max(1, p.count) : 1;
+        const remaining = cnt - Math.min(tc, cnt);
+        if (remaining > 0) next.push({ ...p, multiple: remaining > 1, count: remaining });
+        // else fully executed → drop
+      } else {
+        next.push(p); // not started → keep
+      }
+    });
+    d.payments = sanitizePayments(next);
+    d.status = {};
+    bumpDevice(d);
+  }
+  t.globalOn = false;
+  t.workSession = '';
+  t.reportedSession = '';
+  bumpToken(t);
+  saveDb();
+}
+
+async function handleTelegramUpdate(update) {
+  try {
+    if (update.callback_query) {
+      const cq = update.callback_query;
+      const fromId = String(cq.from && cq.from.id);
+      const data = String(cq.data || '');
+      if (data.startsWith('rw:')) {
+        const t = db.tokens.find((x) => x.id === data.slice(3));
+        if (!t || String(t.telegramId) !== fromId) return tgAnswerCallback(cq.id, 'Недоступно');
+        await tgAnswerCallback(cq.id);
+        await tgSend(fromId,
+          '❓ Настроить <b>доработку</b> автоматически?\n\nСистема удалит уже исполненные платежи со всех ваших устройств и оставит только неисполненные.',
+          [[{ text: '✅ Да, настроить автоматически', callback_data: `rwc:${t.id}` }]]);
+        return;
+      }
+      if (data.startsWith('rwc:')) {
+        const t = db.tokens.find((x) => x.id === data.slice(4));
+        if (!t || String(t.telegramId) !== fromId) return tgAnswerCallback(cq.id, 'Недоступно');
+        reworkToken(t);
+        await tgAnswerCallback(cq.id, 'Готово');
+        await tgSend(fromId, '✅ <b>Всё настроено.</b>\n\nОткройте мини‑апп и настройте расписание для начала работы.');
+        return;
+      }
+      return tgAnswerCallback(cq.id);
+    }
+    if (update.message && update.message.text) {
+      const chatId = update.message.chat.id;
+      const text = String(update.message.text).trim();
+      if (text.startsWith('/start')) {
+        await tgSend(chatId,
+          '👋 <b>ALFA SMS</b>\n\nНажмите кнопку меню снизу, чтобы открыть панель управления устройствами.');
+      }
+    }
+  } catch (e) {
+    console.error('handleTelegramUpdate error:', e.message);
+  }
+}
+
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => { size += c.length; if (size > maxBytes) { req.destroy(); reject(new Error('too_large')); return; } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -418,9 +639,14 @@ function adminTokenSummary(t) {
     activeCount: devices.filter((d) => d.active).length,
     telegramId: t.telegramId ? String(t.telegramId) : '',
     globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
+    schedule: t.schedule || defaultSchedule(),
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
-      lastSeen: d.lastSeen || 0, paymentCount: (d.payments || []).length,
+      lastSeen: d.lastSeen || 0,
+      payments: (d.payments || []).map((p) => ({
+        name: p.name, requisites: p.requisites, amount: p.amount,
+        multiple: !!p.multiple, count: p.multiple ? p.count : 1,
+      })),
     })),
   };
 }
@@ -437,6 +663,35 @@ const server = http.createServer(async (req, res) => {
   const m = req.method;
 
   try {
+    // ================= Telegram webhook =================
+    if (WEBHOOK_SECRET && m === 'POST' && p === `/bot/${WEBHOOK_SECRET}`) {
+      if ((req.headers['x-telegram-bot-api-secret-token'] || '') !== WEBHOOK_SECRET) {
+        res.writeHead(403); return res.end('forbidden');
+      }
+      const update = await readJson(req);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+      if (update) handleTelegramUpdate(update);
+      return;
+    }
+
+    // ================= App updates (OTA, public) =================
+    if (p === '/app/version.json' && m === 'GET') {
+      let info = { versionCode: 0, versionName: '', notes: '' };
+      if (fs.existsSync(UPDATE_FILE)) { try { info = JSON.parse(fs.readFileSync(UPDATE_FILE, 'utf8')); } catch (e) {} }
+      return sendJson(res, 200, info);
+    }
+    if (p === '/app/alfa-sms.apk' && m === 'GET') {
+      if (!fs.existsSync(APK_FILE)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('No APK published'); }
+      const stat = fs.statSync(APK_FILE);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.android.package-archive',
+        'Content-Length': stat.size,
+        'Content-Disposition': 'attachment; filename="alfa-sms.apk"',
+      });
+      return fs.createReadStream(APK_FILE).pipe(res);
+    }
+
     // ================= Mini-app: session/state =================
     if (p === '/api/mini/state' && m === 'GET') {
       const tgId = resolveTelegramId(req);
@@ -539,10 +794,13 @@ const server = http.createServer(async (req, res) => {
         if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
         const body = await readJson(req);
         const on = Boolean(body && body.on);
+        const was = !!t.globalOn;
         t.globalOn = on;
-        if (on) t.workSession = uuid();
+        if (on) { t.workSession = uuid(); t.reportedSession = ''; }
         bumpToken(t);
         saveDb();
+        // Turning work OFF ends the session → send the report of what got done.
+        if (was && !on) maybeSendReport(t);
         return sendJson(res, 200, { state: tokenStateView(t) });
       }
 
@@ -565,7 +823,7 @@ const server = http.createServer(async (req, res) => {
         const d = {
           id: uuid(), tokenId: t.id, name, active: true, createdAt: now(),
           pairedAt: 0, hardwareId: '', hardwareModel: '', secret: '', lastSeen: 0,
-          payments: [defaultPayment('Платеж')], status: {},
+          payments: [], status: {},
           pairing: { code: newPairingCode(), expiresAt: now() + PAIRING_TTL_MS }, rev: 0,
         };
         db.devices.push(d);
@@ -586,7 +844,10 @@ const server = http.createServer(async (req, res) => {
         }
         if (m === 'POST' && action === 'payments') {
           const body = await readJson(req);
-          d.payments = sanitizePayments(body && body.payments);
+          const clean = sanitizePayments(body && body.payments);
+          const err = validatePayments(clean);
+          if (err) return sendJson(res, 400, { error: err });
+          d.payments = clean;
           bumpDevice(d);
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
@@ -647,11 +908,21 @@ const server = http.createServer(async (req, res) => {
           paymentIndex: parseInt(body.status.paymentIndex, 10) || 0,
           triggerCount: parseInt(body.status.triggerCount, 10) || 0,
           paused: Boolean(body.status.paused),
+          done: Boolean(body.status.done),
+          workSession: String(body.status.workSession || ''),
           lastError: body.status.lastError ? String(body.status.lastError).slice(0, 200) : null,
           at: now(),
         };
       }
       saveDbSoon();
+
+      // When every participating device has finished the session, stop and report.
+      if (t && sessionComplete(t)) {
+        t.globalOn = false;
+        bumpToken(t);
+        maybeSendReport(t);
+        saveDb();
+      }
       const current = deviceVersion(d, t);
       const wait = body.wait !== false;
       if (wait && String(body.version || '') === current) {
@@ -724,6 +995,29 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(302, { Location: '/admin' }); return res.end();
     }
 
+    // Publish a new APK + version (Basic-auth). Upload the APK, then announce.
+    if (p === '/admin/apk' && m === 'PUT') {
+      if (!requireAdmin(req, res)) return;
+      let buf;
+      try { buf = await readRawBody(req, MAX_APK_BYTES); } catch (e) { return sendJson(res, 413, { error: 'too_large' }); }
+      ensureDataDir();
+      fs.writeFileSync(APK_FILE, buf);
+      return sendJson(res, 200, { ok: true, bytes: buf.length });
+    }
+    if (p === '/admin/release' && m === 'POST') {
+      if (!requireAdmin(req, res)) return;
+      let parsed;
+      try { parsed = JSON.parse((await readBody(req)) || '{}'); } catch (e) { return sendJson(res, 400, { error: 'bad_json' }); }
+      const info = {
+        versionCode: parseInt(parsed.versionCode, 10) || 0,
+        versionName: String(parsed.versionName || ''),
+        notes: String(parsed.notes || ''),
+      };
+      ensureDataDir();
+      fs.writeFileSync(UPDATE_FILE, JSON.stringify(info, null, 2));
+      return sendJson(res, 200, { ok: true, published: info });
+    }
+
     // ================= Static / root =================
     if ((p === '/' || p === '/app' || p === '/index.html') && m === 'GET') {
       return serveStatic(res, path.join(PUBLIC_DIR, 'miniapp.html'), 'text/html; charset=utf-8');
@@ -747,5 +1041,13 @@ server.listen(PORT, () => {
   console.log(`Legacy admin: http://localhost:${PORT}/admin (user: ${ADMIN_USER})`);
   console.log(`In-app admin Telegram id: ${ADMIN_TG_ID}`);
   console.log(`SMS recipient number: ${RECIPIENT_NUMBER}`);
-  if (!TELEGRAM_BOT_TOKEN) console.log('WARNING: TELEGRAM_BOT_TOKEN not set — initData NOT verified (dev mode).');
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.log('WARNING: TELEGRAM_BOT_TOKEN not set — initData NOT verified, bot reports disabled (dev mode).');
+  } else {
+    // Register the webhook so the bot delivers button presses to us. Idempotent.
+    const url = `${PUBLIC_BASE_URL}/bot/${WEBHOOK_SECRET}`;
+    tgApi('setWebhook', { url, secret_token: WEBHOOK_SECRET, allowed_updates: ['message', 'callback_query'] })
+      .then((r) => console.log(`Telegram setWebhook -> ${url} : ${r && r.ok ? 'ok' : JSON.stringify(r)}`))
+      .catch((e) => console.error('setWebhook failed:', e.message));
+  }
 });

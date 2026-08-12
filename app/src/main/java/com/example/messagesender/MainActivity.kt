@@ -72,6 +72,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (DeviceStore.isPaired(this)) SenderService.start(this)
+
+        // Offer an in-app update if the server has a newer build.
+        UpdateManager.checkForUpdate(this)
     }
 
     override fun onResume() {
