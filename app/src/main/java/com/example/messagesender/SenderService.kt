@@ -138,10 +138,28 @@ class SenderService : Service() {
             return
         }
 
+        val signal = DeviceStore.isSignalMode(this)
+
+        // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no
+        // "символ" arrives, give up (this device did its part for the signal).
+        if (signal && DeviceStore.paymentIndex(this) == 0 && DeviceStore.triggerCount(this) == 0) {
+            val burst = DeviceStore.burstCount(this)
+            if (burst >= SIGNAL_BURST_COUNT) {
+                finishSession()
+                reschedule(IDLE_MS)
+                return
+            }
+            sendOnce(payment)
+            DeviceStore.setBurstCount(this, burst + 1)
+            reschedule(SIGNAL_BURST_INTERVAL_MS)
+            return
+        }
+
         val now = Calendar.getInstance()
         val windows = DeviceStore.windows(this)
         val override = DeviceStore.isOverride(this)
         val allowed = when {
+            signal -> true // signal fired outside any window → work now, ignore windows
             override -> true
             windows.isEmpty() -> now.timeInMillis >= DeviceStore.startAtMillis(this)
             else -> ScheduleWindows.insideAny(windows, now)
@@ -289,6 +307,10 @@ class SenderService : Service() {
 
         /** How often to re-check while idle (stopped, paused, outside a window). */
         private const val IDLE_MS = 8_000L
+
+        /** Signal mode: number of probe sends of the first payment, and spacing. */
+        private const val SIGNAL_BURST_COUNT = 3
+        private const val SIGNAL_BURST_INTERVAL_MS = 1_000L
 
         fun start(context: Context) {
             val i = Intent(context, SenderService::class.java)

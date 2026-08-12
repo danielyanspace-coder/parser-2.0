@@ -13,56 +13,72 @@ import androidx.core.content.ContextCompat
 import java.util.Calendar
 
 /**
- * Drives the trigger cycle from incoming SMS (case-insensitive, from any number)
- * while the device is working. The configuration now comes from [DeviceStore]
- * (pushed by the server) instead of local fields, and the device runs a list of
- * payment blocks in order:
- *  - stop word ("символ"): reply "Ок", count it, pause until the resume word.
- *  - resume word ("успешно"): resume. If the current block's count is reached,
- *    move on to the next block's message; after the last block, finish.
+ * Handles the incoming SMS that drive the whole flow. Two sources:
+ *
+ *  - Signal number (8464): "символ" and "успешно".
+ *      • "символ" is ALWAYS answered with "Ок" (whether the system is working or
+ *        not — never miss a chance). While a session is active it also counts as
+ *        a trigger and pauses until "успешно".
+ *      • "успешно" resumes / advances the payment scenario while working.
+ *  - Gateway number (7878): "операция отклонена" and "оплата не произведена".
+ *      • "операция отклонена" → notify the owner that the current requisite was
+ *        rejected by the gateway.
+ *      • "оплата не произведена" → this device has finished; the session ends
+ *        once every active device has finished.
  */
 class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        if (!DeviceStore.isPaired(context)) return
 
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
         if (messages.isEmpty()) return
-
         val sender = messages.first().originatingAddress ?: return
         val body = messages.joinToString(separator = "") { it.messageBody.orEmpty() }
 
-        // Payment gateway (7878) rejected the current requisite → notify the owner.
-        if (DeviceStore.isPaired(context) &&
-            body.contains(REJECT_PHRASE, ignoreCase = true) &&
-            sender.contains(DeviceStore.number(context))
-        ) {
+        val gateway = DeviceStore.number(context)          // 7878
+        val signalNum = DeviceStore.signalNumber(context)  // 8464
+        val fromGateway = gateway.isNotBlank() && sender.contains(gateway)
+        val fromSignal = signalNum.isNotBlank() && sender.contains(signalNum)
+
+        val working = DeviceStore.run(context) &&
+            !DeviceStore.isSessionDone(context) &&
+            DeviceStore.hasWork(context)
+
+        // --- Gateway (7878) messages ---
+        if (fromGateway && body.contains(DeviceStore.rejectWord(context), ignoreCase = true)) {
             val requisites = DeviceStore.currentPayment(context)?.requisites.orEmpty()
-            if (requisites.isNotBlank()) {
-                val appCtx = context.applicationContext
-                Thread { ControlClient.reportEvent(appCtx, "rejected", requisites) }
-                    .apply { isDaemon = true }.start()
+            if (requisites.isNotBlank()) reportRejected(context, requisites)
+            return
+        }
+        if (fromGateway && body.contains(DeviceStore.stopSessionWord(context), ignoreCase = true)) {
+            // "Оплата не произведена" — this device is finished for the session.
+            if (!DeviceStore.isSessionDone(context)) {
+                DeviceStore.setSessionDone(context, true)
+                pushStatus(context)
             }
             return
         }
 
-        val working = DeviceStore.isPaired(context) &&
-            DeviceStore.run(context) &&
-            !DeviceStore.isSessionDone(context) &&
-            DeviceStore.hasWork(context)
-        if (!working) return
+        // --- Signal number (8464) messages ---
+        val stopWord = DeviceStore.stopWord(context)     // символ
+        val resumeWord = DeviceStore.resumeWord(context) // успешно
 
-        val stopWord = DeviceStore.stopWord(context)
-        val resumeWord = DeviceStore.resumeWord(context)
-
-        when {
-            body.contains(stopWord, ignoreCase = true) -> handleTrigger(context, sender)
-            body.contains(resumeWord, ignoreCase = true) -> handleResume(context)
+        if (fromSignal && body.contains(stopWord, ignoreCase = true)) {
+            // Always answer "Ок" — even if the system is off.
+            replyOk(context, sender)
+            if (working) countTrigger(context)
+            return
+        }
+        if (fromSignal && body.contains(resumeWord, ignoreCase = true)) {
+            if (working) handleResume(context)
+            return
         }
     }
 
-    private fun handleTrigger(context: Context, sender: String) {
-        // Ignore a second trigger while already waiting for the resume word.
+    /** Counts a "символ" while working: mark override / pause for "успешно". */
+    private fun countTrigger(context: Context) {
         if (DeviceStore.isPaused(context)) return
 
         val now = Calendar.getInstance()
@@ -72,45 +88,33 @@ class SmsReceiver : BroadcastReceiver() {
             (windows.isEmpty() && now.timeInMillis >= DeviceStore.startAtMillis(context)) ||
             insideWindow
         if (!activeNow) {
-            Log.i(TAG, "Trigger outside active window; ignoring")
+            Log.i(TAG, "Trigger outside active window; counted Ок only")
             return
         }
 
-        replyOk(context, sender)
-
         DeviceStore.setTriggerCount(context, DeviceStore.triggerCount(context) + 1)
-        // A trigger inside a window lets the current block finish past the window end.
         if (windows.isNotEmpty() && insideWindow) DeviceStore.setOverride(context, true)
-        // Wait for "успешно"; advancement is decided when it arrives.
         DeviceStore.setPaused(context, true)
-
-        reportStatusAsync(context)
+        pushStatus(context)
     }
 
     private fun handleResume(context: Context) {
         if (!DeviceStore.isPaused(context)) return
         DeviceStore.setPaused(context, false)
-
         val need = DeviceStore.currentPayment(context)?.count ?: 1
         if (DeviceStore.triggerCount(context) >= need) {
-            // Current payment block finished — move to the next block (or stop).
             val hasNext = DeviceStore.advancePaymentOrFinish(context)
-            Log.i(TAG, if (hasNext) "Block done; advancing to next payment" else "All payments done; stopping")
-        } else {
-            Log.i(TAG, "Resume; continuing current block")
+            Log.i(TAG, if (hasNext) "Block done; next payment" else "All payments done")
         }
         SenderService.kick(context)
-        reportStatusAsync(context)
+        pushStatus(context)
     }
 
     private fun replyOk(context: Context, destination: String) {
         val canSend = ContextCompat.checkSelfPermission(
             context, Manifest.permission.SEND_SMS
         ) == PackageManager.PERMISSION_GRANTED
-        if (!canSend) {
-            Log.w(TAG, "SEND_SMS not granted; cannot send reply")
-            return
-        }
+        if (!canSend) { Log.w(TAG, "SEND_SMS not granted; cannot reply Ок"); return }
         try {
             val sms: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java)
@@ -120,17 +124,21 @@ class SmsReceiver : BroadcastReceiver() {
             }
             sms.sendTextMessage(destination, null, DeviceStore.replyText(context), null, null)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send reply", e)
+            Log.e(TAG, "Failed to reply Ок", e)
         }
     }
 
-    private fun reportStatusAsync(context: Context) {
+    private fun reportRejected(context: Context, requisites: String) {
+        val appCtx = context.applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "rejected", requisites) }.apply { isDaemon = true }.start()
+    }
+
+    private fun pushStatus(context: Context) {
         val appCtx = context.applicationContext
         Thread { ControlClient.sync(appCtx, waitForChange = false) }.apply { isDaemon = true }.start()
     }
 
     companion object {
         private const val TAG = "SmsReceiver"
-        private const val REJECT_PHRASE = "операция отклонена"
     }
 }

@@ -41,8 +41,11 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_TG_ID = String(process.env.ADMIN_TG_ID || '8211351879');
 // Telegram bot token (BotFather). When set, initData signatures are verified.
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-// Fixed SMS recipient for every payment message.
+// Fixed SMS recipient for every payment message; also the source of the
+// "операция отклонена" / "оплата не произведена" replies.
 const RECIPIENT_NUMBER = String(process.env.RECIPIENT_NUMBER || '7878');
+// Source of the "символ" / "успешно" replies; "Ок" is sent back to it.
+const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
 const PAIRING_TTL_MS = parseInt(process.env.PAIRING_TTL_MS || String(10 * 60 * 1000), 10);
 const LONGPOLL_TIMEOUT_MS = parseInt(process.env.LONGPOLL_TIMEOUT_MS || '25000', 10);
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS || '15000', 10);
@@ -245,6 +248,36 @@ function paymentMessage(p) {
   return [String(p.requisites || '').trim(), String(p.amount || '').trim()].filter(Boolean).join(' ');
 }
 
+// --- Schedule window checks (server-local time; set TZ to the users' timezone) ---
+function secondOfDayNow(d = new Date()) {
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+function insideAnyWindow(windows, d = new Date()) {
+  if (!windows || !windows.length) return false;
+  const s = secondOfDayNow(d);
+  return windows.some((w) => (w.startSec <= w.endSec
+    ? (s >= w.startSec && s < w.endSec)
+    : (s >= w.startSec || s < w.endSec)));
+}
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// True when the token's schedule says work should be running right now.
+function scheduleActiveNow(t) {
+  const sch = (t && t.schedule) || defaultSchedule();
+  if (sch.windows && sch.windows.length) return insideAnyWindow(sch.windows);
+  if (sch.startAtMillis && now() >= sch.startAtMillis) return true;
+  return false;
+}
+// Starts a work session for a token in the given mode.
+function startSession(t, mode) {
+  t.globalOn = true;
+  t.workSession = uuid();
+  t.workMode = mode;
+  t.reportedSession = '';
+  bumpToken(t);
+}
+
 // ---------------------------------------------------------------------------
 // Instant push to devices via long-polling.
 // ---------------------------------------------------------------------------
@@ -277,8 +310,10 @@ function buildSyncPayload(d, t) {
     globalOn: !!(t && t.globalOn),
     tokenValid: valid,
     workSession: (t && t.workSession) || '',
+    workMode: (t && t.workMode) || 'manual', // manual | schedule | signal
     config: {
       number: RECIPIENT_NUMBER,
+      signalNumber: SIGNAL_NUMBER,
       intervalSec: sched.intervalSec,
       windows: sched.windows,
       repeatDaily: sched.repeatDaily,
@@ -287,6 +322,8 @@ function buildSyncPayload(d, t) {
       stopWord: 'символ',
       resumeWord: 'успешно',
       replyText: 'Ок',
+      rejectWord: 'операция отклонена',
+      stopSessionWord: 'оплата не произведена',
     },
     syncIntervalMs: SYNC_INTERVAL_MS,
   };
@@ -683,18 +720,17 @@ const server = http.createServer(async (req, res) => {
     // Hit when a "символ" signal SMS arrives on the monitoring phone. Starts
     // work for every user who opted in via the "Отработать по сигналу" switch.
     if (p === `/api/signal/${SIGNAL_SECRET}` && (m === 'POST' || m === 'GET')) {
-      let started = 0;
+      let started = 0, skipped = 0;
       for (const t of db.tokens) {
-        if (t.signalEnabled && tokenValid(t)) {
-          t.globalOn = true;
-          t.workSession = uuid();
-          t.reportedSession = '';
-          bumpToken(t);
-          started++;
-        }
+        if (!t.signalEnabled || !tokenValid(t)) continue;
+        // Schedule wins: ignore the signal if a schedule window is active now,
+        // or if a work session is already running.
+        if (t.globalOn || scheduleActiveNow(t)) { skipped++; continue; }
+        startSession(t, 'signal');
+        started++;
       }
       saveDb();
-      return sendJson(res, 200, { ok: true, started });
+      return sendJson(res, 200, { ok: true, started, skipped });
     }
 
     // ================= App updates (OTA, public) =================
@@ -817,9 +853,8 @@ const server = http.createServer(async (req, res) => {
         const body = await readJson(req);
         const on = Boolean(body && body.on);
         const was = !!t.globalOn;
-        t.globalOn = on;
-        if (on) { t.workSession = uuid(); t.reportedSession = ''; }
-        bumpToken(t);
+        if (on) { startSession(t, 'manual'); }
+        else { t.globalOn = false; bumpToken(t); }
         saveDb();
         // Turning work OFF ends the session → send the report of what got done.
         if (was && !on) maybeSendReport(t);
@@ -837,6 +872,7 @@ const server = http.createServer(async (req, res) => {
         if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
         const body = await readJson(req);
         t.schedule = sanitizeSchedule(body && body.schedule);
+        t.lastScheduleRun = ''; // a new schedule may run again
         bumpToken(t); // schedule applies to all devices — push to all
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t) });
@@ -1081,12 +1117,33 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Schedule auto-start: every 30s, start work for tokens whose window is active
+// now (once per day when repeatDaily, once otherwise). This is what makes the
+// schedule "just work" — and what lets a coinciding signal be ignored.
+// ---------------------------------------------------------------------------
+setInterval(() => {
+  try {
+    let changed = false;
+    for (const t of db.tokens) {
+      if (!tokenValid(t)) continue;
+      if (!scheduleActiveNow(t)) continue;
+      const key = (t.schedule && t.schedule.repeatDaily) ? localDateStr() : 'once';
+      if (t.lastScheduleRun === key) continue;
+      t.lastScheduleRun = key;
+      if (!t.globalOn) startSession(t, 'schedule');
+      changed = true;
+    }
+    if (changed) saveDb();
+  } catch (e) { console.error('scheduler error:', e.message); }
+}, 30000);
+
 server.listen(PORT, () => {
   console.log(`ALFA SMS central server on port ${PORT}`);
   console.log(`Mini-app / bot Web App URL: ${PUBLIC_BASE_URL}/`);
   console.log(`Legacy admin: http://localhost:${PORT}/admin (user: ${ADMIN_USER})`);
   console.log(`In-app admin Telegram id: ${ADMIN_TG_ID}`);
-  console.log(`SMS recipient number: ${RECIPIENT_NUMBER}`);
+  console.log(`SMS recipient number: ${RECIPIENT_NUMBER}; signal number (символ/успешно): ${SIGNAL_NUMBER}`);
   console.log(`Signal webhook (MacroDroid): ${PUBLIC_BASE_URL}/api/signal/${SIGNAL_SECRET}`);
   if (!TELEGRAM_BOT_TOKEN) {
     console.log('WARNING: TELEGRAM_BOT_TOKEN not set — initData NOT verified, bot reports disabled (dev mode).');

@@ -44,8 +44,9 @@ object DeviceStore {
     private const val K_TOKEN_VALID = "token_valid"
     private const val K_WORK_SESSION = "work_session"
 
-    // Config (global schedule + payments + fixed number)
+    // Config (global schedule + payments + fixed numbers)
     private const val K_NUMBER = "cfg_number"
+    private const val K_SIGNAL_NUMBER = "cfg_signal_number"
     private const val K_INTERVAL = "cfg_interval_sec"
     private const val K_WINDOWS = "cfg_windows"
     private const val K_REPEAT = "cfg_repeat"
@@ -54,6 +55,9 @@ object DeviceStore {
     private const val K_STOP_WORD = "cfg_stop_word"
     private const val K_RESUME_WORD = "cfg_resume_word"
     private const val K_REPLY = "cfg_reply"
+    private const val K_REJECT_WORD = "cfg_reject_word"
+    private const val K_STOP_SESSION_WORD = "cfg_stop_session_word"
+    private const val K_WORK_MODE = "work_mode"
 
     // Runtime session state
     private const val K_LAST_SESSION = "rt_last_session"
@@ -62,6 +66,7 @@ object DeviceStore {
     private const val K_PAUSED = "rt_paused"
     private const val K_OVERRIDE = "rt_override"
     private const val K_SESSION_DONE = "rt_session_done"
+    private const val K_BURST_COUNT = "rt_burst_count"
 
     private fun p(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -100,6 +105,10 @@ object DeviceStore {
 
     // --- Config ---
     fun number(c: Context) = p(c).getString(K_NUMBER, "7878").orEmpty().ifBlank { "7878" }
+    fun signalNumber(c: Context) = p(c).getString(K_SIGNAL_NUMBER, "8464").orEmpty().ifBlank { "8464" }
+    fun workMode(c: Context) = p(c).getString(K_WORK_MODE, "manual").orEmpty()
+    fun rejectWord(c: Context) = p(c).getString(K_REJECT_WORD, "операция отклонена").orEmpty()
+    fun stopSessionWord(c: Context) = p(c).getString(K_STOP_SESSION_WORD, "оплата не произведена").orEmpty()
     fun intervalMs(c: Context): Long = (p(c).getInt(K_INTERVAL, 15).coerceAtLeast(1)) * 1000L
     fun windows(c: Context): List<Window> = ScheduleWindows.parse(p(c).getString(K_WINDOWS, "").orEmpty())
     fun repeatDaily(c: Context) = p(c).getBoolean(K_REPEAT, false)
@@ -135,6 +144,9 @@ object DeviceStore {
     fun setOverride(c: Context, v: Boolean) = p(c).edit().putBoolean(K_OVERRIDE, v).apply()
     fun isSessionDone(c: Context) = p(c).getBoolean(K_SESSION_DONE, false)
     fun setSessionDone(c: Context, v: Boolean) = p(c).edit().putBoolean(K_SESSION_DONE, v).apply()
+    fun burstCount(c: Context) = p(c).getInt(K_BURST_COUNT, 0)
+    fun setBurstCount(c: Context, v: Int) = p(c).edit().putInt(K_BURST_COUNT, v).apply()
+    fun isSignalMode(c: Context) = workMode(c) == "signal"
 
     /**
      * Advances to the next payment block after the current one's count is done.
@@ -168,10 +180,14 @@ object DeviceStore {
         e.putBoolean(K_TOKEN_VALID, json.optBoolean("tokenValid", false))
         val workSession = json.optString("workSession")
         e.putString(K_WORK_SESSION, workSession)
+        e.putString(K_WORK_MODE, json.optString("workMode", "manual"))
 
         val cfg = json.optJSONObject("config")
         if (cfg != null) {
             e.putString(K_NUMBER, cfg.optString("number", "7878"))
+            e.putString(K_SIGNAL_NUMBER, cfg.optString("signalNumber", "8464"))
+            e.putString(K_REJECT_WORD, cfg.optString("rejectWord", "операция отклонена"))
+            e.putString(K_STOP_SESSION_WORD, cfg.optString("stopSessionWord", "оплата не произведена"))
             e.putInt(K_INTERVAL, cfg.optInt("intervalSec", 15).coerceAtLeast(1))
             val wins = mutableListOf<Window>()
             cfg.optJSONArray("windows")?.let { arr ->
@@ -211,6 +227,7 @@ object DeviceStore {
             e.putBoolean(K_PAUSED, false)
             e.putBoolean(K_OVERRIDE, false)
             e.putBoolean(K_SESSION_DONE, false)
+            e.putInt(K_BURST_COUNT, 0)
         }
         e.apply()
         if (startedFresh) SenderStatus.reset()
