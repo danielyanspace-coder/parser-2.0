@@ -1,84 +1,54 @@
 # Сервер управления ALFA SMS
 
-Node.js‑сервер **без зависимостей** (только встроенные модули). Обслуживает три
-поверхности: админку токенов, API мини‑аппа Telegram и API устройств (APK).
-Данные хранятся в одном JSON‑файле `data/db.json`.
+Node.js без зависимостей (только встроенные модули). Обслуживает мини-апп
+Telegram, админ-API, API устройств и резервную админку по паролю. Данные — в
+`data/db.json`. Установка по шагам — в [../DEPLOY.md](../DEPLOY.md).
 
-## Запуск
-
-Нужен Node.js 18+.
-
+## Быстрый запуск (для разработки)
 ```bash
 cd server
-ADMIN_PASSWORD='придумайте-пароль' \
-PUBLIC_BASE_URL='https://alfa-vpn.ru' \
-TELEGRAM_BOT_TOKEN='123456:AA...' \
-node server.js
+ADMIN_PASSWORD='пароль' PUBLIC_BASE_URL='https://sms.alfa-vpn.ru' \
+ADMIN_TG_ID='8211351879' TELEGRAM_BOT_TOKEN='...' node server.js
 ```
 
 ### Переменные окружения
+| Переменная            | По умолчанию              | Назначение |
+|-----------------------|---------------------------|------------|
+| `ADMIN_PASSWORD`      | — (обязательно)           | Пароль резервной админки `/admin`. |
+| `ADMIN_TG_ID`         | `8211351879`              | Telegram ID администратора (админка в мини-аппе). |
+| `TELEGRAM_BOT_TOKEN`  | — (пусто)                 | Токен бота. Задан → проверяется подпись initData. Пусто → dev-режим. |
+| `PUBLIC_BASE_URL`     | `https://sms.alfa-vpn.ru` | Адрес сервиса, зашивается в QR-код. |
+| `PORT`                | `8080`                    | Локальный порт (за nginx). |
+| `RECIPIENT_NUMBER`    | `7878`                    | Номер получателя всех платёжных SMS. |
+| `LONGPOLL_TIMEOUT_MS` | `25000`                   | Сколько держать «спящий» long-poll устройства. |
 
-| Переменная            | По умолчанию            | Назначение |
-|-----------------------|-------------------------|------------|
-| `ADMIN_PASSWORD`      | — (обязательно)         | Пароль входа в админку. |
-| `ADMIN_USER`          | `admin`                 | Логин админки. |
-| `PORT`                | `8080`                  | Порт. |
-| `PUBLIC_BASE_URL`     | `https://alfa-vpn.ru`   | Публичный адрес сервера. Зашивается в QR‑код, по нему APK находит сервер. |
-| `TELEGRAM_BOT_TOKEN`  | — (пусто)               | Токен бота из BotFather. Если задан — подпись Telegram `initData` проверяется (защита от подделки Telegram ID). Если пусто — проверка отключена (режим разработки). |
-| `PAIRING_TTL_MS`      | `600000` (10 мин)       | Срок жизни QR‑кода привязки. |
-| `LONGPOLL_TIMEOUT_MS` | `25000`                 | Сколько сервер держит «спящий» long‑poll устройства до heartbeat‑ответа. |
-| `SYNC_INTERVAL_MS`    | `15000`                 | Подсказка устройству о паузе между циклами при ошибке сети. |
+## Модель данных
+- **Токен**: срок действия, лимит устройств, привязанный Telegram ID, общий
+  переключатель работы, **общее расписание** (интервал/окна/повтор/старт).
+- **Устройство**: имя, активность, статус привязки, **список платежей**
+  (реквизиты + сумма + «несколько платежей» + количество).
 
-При старте сервер печатает адрес админки и мини‑аппа.
+## Мгновенная доставка (long-poll)
+Каждое устройство держит один открытый `POST /api/device/sync`. Сервер отпускает
+его в момент изменения (тумблер работы, активность устройства, платежи,
+расписание, отзыв токена). `bumpToken`/`bumpDevice` будят припаркованные запросы.
 
-## Мгновенная доставка команд (long‑polling)
+## API (кратко)
+**Устройство:** `POST /api/device/pair`, `POST /api/device/sync`
+(config содержит `number`, расписание и `payments` с уже вычисленным `count`).
 
-Каждое привязанное устройство держит один открытый запрос `POST /api/device/sync`.
-Сервер «паркует» его и отпускает **в момент любого изменения** нужного устройству
-состояния: общий переключатель работы, флаг активности устройства или его
-настройки. Поэтому «Включить все устройства в работу» доходит до телефонов за
-миллисекунды, а не за период опроса. Изменения (`bumpToken` / `bumpDevice`)
-будят все припаркованные запросы затронутых устройств.
+**Мини-апп** (заголовок `X-Init-Data`): `GET /api/mini/state`,
+`POST /api/mini/bind`, `POST /api/mini/global`, `POST /api/mini/schedule`,
+`POST /api/mini/device`, `POST /api/mini/device/:id/{payments,active,name,pair}`,
+`DELETE /api/mini/device/:id`.
 
-## Telegram‑бот и мини‑апп
+**Админ** (initData, только `ADMIN_TG_ID`): `GET /api/admin/tokens`,
+`POST /api/admin/token`, `POST /api/admin/token/:id/{quota,extend,toggle,unbind}`,
+`DELETE /api/admin/token/:id`.
 
-1. В [@BotFather](https://t.me/BotFather) создайте бота, получите токен.
-2. Задайте боту Web App / кнопку меню с URL `https://alfa-vpn.ru/` (мини‑апп
-   отдаётся по корню `/`).
-3. Передайте серверу `TELEGRAM_BOT_TOKEN`.
-4. Пользователь открывает мини‑апп, вводит токен один раз — его Telegram ID
-   привязывается к токену, дальше вход автоматический.
+**Резервная админка:** `GET /admin` (Basic-auth).
 
-## API
-
-### Устройство (APK)
-
-- `POST /api/device/pair` — `{code, hardwareId, model}` → `{deviceId, secret, name}`.
-- `POST /api/device/sync` — `{deviceId, secret, version, wait, status}` →
-  `{run, active, globalOn, tokenValid, workSession, config, stopWord, resumeWord, replyText, version}`.
-  При `wait:true` и совпадении `version` запрос «висит» до изменения состояния.
-
-### Мини‑апп (заголовок `X-Init-Data` с Telegram initData)
-
-- `GET  /api/mini/state` — состояние токена и устройств (или `{needToken:true}`).
-- `POST /api/mini/bind` — `{token}` привязать токен к Telegram‑аккаунту.
-- `POST /api/mini/global` — `{on}` общий переключатель работы.
-- `POST /api/mini/device` — `{name}` добавить устройство (вернёт код/QR).
-- `POST /api/mini/device/:id/config` — сохранить настройки.
-- `POST /api/mini/device/:id/active` — `{active}` активно/неактивно.
-- `POST /api/mini/device/:id/name` — переименовать.
-- `POST /api/mini/device/:id/pair` — новый QR‑код привязки.
-- `DELETE /api/mini/device/:id` — удалить устройство (освободить слот).
-
-### Админка (Basic‑auth)
-
-- `GET  /admin` — список токенов, создание, лимит устройств, продление, вкл/выкл, удаление, отвязка TG.
-
-## Хостинг
-
-- **Обязательно HTTPS** — токены и команды идут по сети. На alfa‑vpn.ru
-  поставьте reverse‑proxy (Caddy/Nginx) с сертификатом перед Node.
-- Каталог `data/` (база токенов и устройств) **не коммитьте** — он в `.gitignore`.
-  Делайте резервные копии: в нём вся привязка устройств и настройки.
-- Для устойчивости long‑poll (25 с) убедитесь, что reverse‑proxy не рвёт
-  соединение раньше (`proxy_read_timeout` ≥ 60s в Nginx).
+## Развёртывание
+Файлы в [`deploy/`](deploy/): `alfa-sms.service` (systemd) и
+`nginx-sms.alfa-vpn.ru.conf` (отдельный поддомен, `proxy_read_timeout 120s` для
+long-poll). Каталог `data/` в `.gitignore` — делайте бэкап.

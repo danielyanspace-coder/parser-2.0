@@ -24,8 +24,8 @@
     <string name="state_scheduled">⏳ Ожидает времени старта…</string>
     <string name="state_token_invalid">⛔ Токен отключён или истёк</string>
     <string name="state_offline">⚠ Нет связи с сервером…</string>
-    <string name="state_triggers">триггеров: %1$d</string>
-    <string name="state_triggers_limit">триггеров: %1$d / %2$d</string>
+    <string name="state_payment">платёж %1$d из %2$d</string>
+    <string name="state_triggers">циклов: %1$d</string>
     <string name="state_error">⚠ Ошибка: %1$s</string>
 
     <!-- Permissions / notifications -->

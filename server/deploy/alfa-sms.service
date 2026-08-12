@@ -1,0 +1,17 @@
+[Unit]
+Description=ALFA SMS central control server
+After=network.target
+
+[Service]
+Type=simple
+# Куда вы склонировали репозиторий:
+WorkingDirectory=/opt/alfa-sms/server
+# Файл с переменными окружения (скопируйте из .env.example):
+EnvironmentFile=/opt/alfa-sms/server/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+# Данные (токены/устройства) лежат в server/data — переживают перезапуск.
+
+[Install]
+WantedBy=multi-user.target

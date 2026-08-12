@@ -14,12 +14,12 @@ import java.util.Calendar
 
 /**
  * Drives the trigger cycle from incoming SMS (case-insensitive, from any number)
- * while the device is working, exactly as before — only the configuration now
- * comes from [DeviceStore] (pushed by the server) instead of local fields:
- *  - stop word ("символ"): reply "Ок", count it, pause until the resume word;
- *    inside a window with a limit set, mark an override so the job runs past the
- *    window end; when the count reaches the limit, finish the session.
- *  - resume word ("успешно"): resume sending.
+ * while the device is working. The configuration now comes from [DeviceStore]
+ * (pushed by the server) instead of local fields, and the device runs a list of
+ * payment blocks in order:
+ *  - stop word ("символ"): reply "Ок", count it, pause until the resume word.
+ *  - resume word ("успешно"): resume. If the current block's count is reached,
+ *    move on to the next block's message; after the last block, finish.
  */
 class SmsReceiver : BroadcastReceiver() {
 
@@ -35,7 +35,7 @@ class SmsReceiver : BroadcastReceiver() {
         val working = DeviceStore.isPaired(context) &&
             DeviceStore.run(context) &&
             !DeviceStore.isSessionDone(context) &&
-            DeviceStore.hasSendConfig(context)
+            DeviceStore.hasWork(context)
         if (!working) return
 
         val stopWord = DeviceStore.stopWord(context)
@@ -43,13 +43,7 @@ class SmsReceiver : BroadcastReceiver() {
 
         when {
             body.contains(stopWord, ignoreCase = true) -> handleTrigger(context, sender)
-            body.contains(resumeWord, ignoreCase = true) -> {
-                if (DeviceStore.isPaused(context)) {
-                    Log.i(TAG, "Resume word received; continuing")
-                    DeviceStore.setPaused(context, false)
-                    SenderService.kick(context)
-                }
-            }
+            body.contains(resumeWord, ignoreCase = true) -> handleResume(context)
         }
     }
 
@@ -70,22 +64,28 @@ class SmsReceiver : BroadcastReceiver() {
 
         replyOk(context, sender)
 
-        val count = DeviceStore.triggerCount(context) + 1
-        DeviceStore.setTriggerCount(context, count)
+        DeviceStore.setTriggerCount(context, DeviceStore.triggerCount(context) + 1)
+        // A trigger inside a window lets the current block finish past the window end.
+        if (windows.isNotEmpty() && insideWindow) DeviceStore.setOverride(context, true)
+        // Wait for "успешно"; advancement is decided when it arrives.
+        DeviceStore.setPaused(context, true)
 
-        val limit = DeviceStore.triggerLimit(context)
-        if (windows.isNotEmpty() && insideWindow && limit > 0) {
-            DeviceStore.setOverride(context, true)
-        }
+        reportStatusAsync(context)
+    }
 
-        if (limit > 0 && count >= limit) {
-            Log.i(TAG, "Trigger limit reached ($count/$limit); finishing session")
-            DeviceStore.setSessionDone(context, true)
+    private fun handleResume(context: Context) {
+        if (!DeviceStore.isPaused(context)) return
+        DeviceStore.setPaused(context, false)
+
+        val need = DeviceStore.currentPayment(context)?.count ?: 1
+        if (DeviceStore.triggerCount(context) >= need) {
+            // Current payment block finished — move to the next block (or stop).
+            val hasNext = DeviceStore.advancePaymentOrFinish(context)
+            Log.i(TAG, if (hasNext) "Block done; advancing to next payment" else "All payments done; stopping")
         } else {
-            DeviceStore.setPaused(context, true)
+            Log.i(TAG, "Resume; continuing current block")
         }
-
-        // Report the new counter to the server promptly (for the mini-app display).
+        SenderService.kick(context)
         reportStatusAsync(context)
     }
 

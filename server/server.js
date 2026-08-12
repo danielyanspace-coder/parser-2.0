@@ -3,24 +3,25 @@
 /*
  * ALFA SMS — centralized control server (zero dependencies, Node 18+).
  *
- * Three surfaces:
- *   1. /admin        — password-protected panel. Create access tokens with an
- *                      expiry date and a device quota, add/remove devices to a
- *                      token, enable/disable (revoke) and delete tokens.
- *   2. /api/mini/*   — Telegram mini-app API. The user opens the mini-app, binds
- *                      their access token to their Telegram id (once), then
- *                      manages devices: add (with a QR pairing code), name,
- *                      configure ALL sending settings per device, toggle each
- *                      device active/inactive, and flip the global "put all
- *                      devices to work" switch.
- *   3. /api/device/* — the Android APK API. The APK is only a QR scanner: it
- *                      pairs with a device slot via the scanned code, then polls
- *                      /sync to receive its configuration and run-state and to
- *                      report status.
+ * Surfaces:
+ *   1. /api/mini/*   — Telegram mini-app API. The user binds their access token
+ *                      to their Telegram id (once), sets a GLOBAL schedule that
+ *                      applies to all their devices (interval / windows / start),
+ *                      manages devices (add via QR, active toggle) and per-device
+ *                      PAYMENTS (each: requisites + amount + optional repeat
+ *                      count). The global work switch starts every active device
+ *                      instantly.
+ *   2. /api/admin/*  — full admin panel, restricted to one Telegram id
+ *                      (ADMIN_TG_ID). Manage tokens: create with expiry + device
+ *                      quota, change quota, extend, enable/disable, unbind, delete.
+ *   3. /api/device/* — the Android APK. It only scans a QR to pair, then
+ *                      long-polls its desired state (schedule + payments) and
+ *                      reports status. SMS always go to a fixed number (7878).
+ *   4. /admin        — legacy password-protected HTML panel (break-glass).
  *
- * Storage is a single JSON file (data/db.json); low volume, single process.
+ * Storage: a single JSON file (data/db.json).
  *
- * Run:  ADMIN_PASSWORD=secret node server.js
+ * Run:  ADMIN_PASSWORD=secret TELEGRAM_BOT_TOKEN=... node server.js
  */
 
 const http = require('http');
@@ -35,19 +36,16 @@ const path = require('path');
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-// Telegram bot token (from BotFather). When set, the mini-app's Telegram
-// initData signature is verified so a Telegram id cannot be spoofed. When
-// unset (local development) the check is skipped and X-Debug-Tg-Id is honored.
+// The single Telegram id allowed into the in-app admin panel.
+const ADMIN_TG_ID = String(process.env.ADMIN_TG_ID || '8211351879');
+// Telegram bot token (BotFather). When set, initData signatures are verified.
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-// How long a QR pairing code stays valid.
+// Fixed SMS recipient for every payment message.
+const RECIPIENT_NUMBER = String(process.env.RECIPIENT_NUMBER || '7878');
 const PAIRING_TTL_MS = parseInt(process.env.PAIRING_TTL_MS || String(10 * 60 * 1000), 10);
-// Heartbeat timeout for the device long-poll: how long the server holds an
-// idle /sync request open before answering with the (unchanged) current state.
 const LONGPOLL_TIMEOUT_MS = parseInt(process.env.LONGPOLL_TIMEOUT_MS || '25000', 10);
-// Advisory reconnect delay for the device between long-poll cycles / on error.
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS || '15000', 10);
-// Public base URL embedded into the QR so the APK knows which server to reach.
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://alfa-vpn.ru').replace(/\/+$/, '');
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://sms.alfa-vpn.ru').replace(/\/+$/, '');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -73,6 +71,9 @@ function loadDb() {
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     db.tokens = db.tokens || [];
     db.devices = db.devices || [];
+    // Migrate any older records to the current shape.
+    for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
+    for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [defaultPayment('Платеж')];
     return db;
   } catch (e) {
     console.error('Failed to read db.json, starting empty:', e.message);
@@ -85,9 +86,8 @@ function saveDb() {
   ensureDataDir();
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, DB_FILE); // atomic replace
+  fs.renameSync(tmp, DB_FILE);
 }
-// Coalesce frequent writes (device polling) into at most one write per tick.
 function saveDbSoon() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
@@ -96,31 +96,24 @@ function saveDbSoon() {
   }, 500);
 }
 
-const db = loadDb();
-
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
 function now() { return Date.now(); }
-
 function uuid() { return crypto.randomUUID(); }
 
 function newTokenValue() {
-  // 20 hex chars grouped for readability: XXXXX-XXXXX-XXXXX-XXXXX
   const hex = crypto.randomBytes(10).toString('hex').toUpperCase();
   return hex.match(/.{1,5}/g).join('-');
 }
-
 function newPairingCode() {
-  // 8 unambiguous chars (no 0/O/1/I).
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let s = '';
   const bytes = crypto.randomBytes(8);
   for (let i = 0; i < 8; i++) s += alphabet[bytes[i] % alphabet.length];
   return s;
 }
-
 function newSecret() { return crypto.randomBytes(24).toString('hex'); }
 
 function sendJson(res, status, obj) {
@@ -128,47 +121,31 @@ function sendJson(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
 }
-
 function readBody(req, maxBytes = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (c) => {
-      data += c;
-      if (data.length > maxBytes) { req.destroy(); reject(new Error('too_large')); }
-    });
+    req.on('data', (c) => { data += c; if (data.length > maxBytes) { req.destroy(); reject(new Error('too_large')); } });
     req.on('end', () => resolve(data));
     req.on('error', reject);
   });
 }
-
 async function readJson(req) {
   const raw = await readBody(req);
   try { return JSON.parse(raw || '{}'); } catch (e) { return null; }
 }
-
 function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
-
-function fmtTime(ms) {
-  return ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '—';
-}
-
-function fmtDate(ms) {
-  return ms ? new Date(ms).toISOString().slice(0, 10) : '∞';
-}
-
+function fmtTime(ms) { return ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '—'; }
+function fmtDate(ms) { return ms ? new Date(ms).toISOString().slice(0, 10) : '∞'; }
 function safeEqual(a, b) {
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
+  const ba = Buffer.from(String(a)); const bb = Buffer.from(String(b));
   if (ba.length !== bb.length) return false;
   return crypto.timingSafeEqual(ba, bb);
 }
 
 // ---------------------------------------------------------------------------
-// Domain helpers
+// Domain model
 // ---------------------------------------------------------------------------
 
 function tokenValid(t) {
@@ -176,92 +153,133 @@ function tokenValid(t) {
   if (t.expiresAt && now() >= t.expiresAt) return false;
   return true;
 }
+function findTokenByValue(v) { return db.tokens.find((t) => t.value === v); }
+function findTokenByTelegram(id) { return db.tokens.find((t) => t.telegramId && String(t.telegramId) === String(id)); }
+function tokenDevices(tokenId) { return db.devices.filter((d) => d.tokenId === tokenId); }
 
-function findTokenByValue(value) {
-  return db.tokens.find((t) => t.value === value);
+// Global (per-token) schedule that applies to every device under the token.
+function defaultSchedule() {
+  return { intervalSec: 15, windows: [], repeatDaily: false, startAtMillis: 0 };
 }
-
-function findTokenByTelegram(tgId) {
-  return db.tokens.find((t) => t.telegramId && String(t.telegramId) === String(tgId));
-}
-
-function tokenDevices(tokenId) {
-  return db.devices.filter((d) => d.tokenId === tokenId);
-}
-
-function defaultConfig() {
-  return {
-    phone: '',
-    message1: '',
-    message2: '',
-    intervalSec: 15,
-    windows: [],          // [{startSec,endSec}]
-    repeatDaily: false,
-    startAtMillis: 0,     // 0 = as soon as work is on
-    triggerLimit: 0,      // 0 = unlimited
-  };
-}
-
-function sanitizeConfig(input) {
-  const c = defaultConfig();
-  if (!input || typeof input !== 'object') return c;
-  c.phone = String(input.phone || '').slice(0, 40);
-  c.message1 = String(input.message1 || '').slice(0, 1000);
-  c.message2 = String(input.message2 || '').slice(0, 1000);
+function sanitizeSchedule(input) {
+  const s = defaultSchedule();
+  if (!input || typeof input !== 'object') return s;
   let iv = parseInt(input.intervalSec, 10);
   if (!Number.isFinite(iv) || iv < 1) iv = 15;
-  c.intervalSec = Math.min(iv, 86400);
-  c.windows = Array.isArray(input.windows)
-    ? input.windows
-        .map((w) => ({
-          startSec: Math.max(0, Math.min(86399, parseInt(w.startSec, 10) || 0)),
-          endSec: Math.max(0, Math.min(86399, parseInt(w.endSec, 10) || 0)),
-        }))
-        .filter((w) => w.startSec !== w.endSec)
-        .slice(0, 20)
+  s.intervalSec = Math.min(iv, 86400);
+  s.windows = Array.isArray(input.windows)
+    ? input.windows.map((w) => ({
+        startSec: Math.max(0, Math.min(86399, parseInt(w.startSec, 10) || 0)),
+        endSec: Math.max(0, Math.min(86399, parseInt(w.endSec, 10) || 0)),
+      })).filter((w) => w.startSec !== w.endSec).slice(0, 20)
     : [];
-  c.repeatDaily = Boolean(input.repeatDaily);
+  s.repeatDaily = Boolean(input.repeatDaily);
   const start = parseInt(input.startAtMillis, 10);
-  c.startAtMillis = Number.isFinite(start) && start > 0 ? start : 0;
-  let lim = parseInt(input.triggerLimit, 10);
-  if (!Number.isFinite(lim) || lim < 0) lim = 0;
-  c.triggerLimit = Math.min(lim, 100000);
-  return c;
+  s.startAtMillis = Number.isFinite(start) && start > 0 ? start : 0;
+  return s;
 }
 
-// Public view of a device for the mini-app.
+// A payment block: requisites (message part 1) + amount (message part 2), and
+// optionally repeated N times ("несколько платежей на этот реквизит с той же
+// суммой"). Each repeat is one символ→Ок→успешно cycle.
+function defaultPayment(name) {
+  return { id: uuid(), name: name || 'Платеж', requisites: '', amount: '', multiple: false, count: 1 };
+}
+function sanitizePayments(input) {
+  if (!Array.isArray(input)) return [defaultPayment('Платеж')];
+  const list = input.slice(0, 50).map((p, i) => {
+    const multiple = Boolean(p && p.multiple);
+    let count = parseInt(p && p.count, 10);
+    if (!Number.isFinite(count) || count < 1) count = 1;
+    return {
+      id: (p && p.id) ? String(p.id).slice(0, 40) : uuid(),
+      name: String((p && p.name) || (i === 0 ? 'Платеж' : `Платеж ${i + 1}`)).slice(0, 40),
+      requisites: String((p && p.requisites) || '').slice(0, 1000),
+      amount: String((p && p.amount) || '').slice(0, 1000),
+      multiple,
+      count: multiple ? Math.min(count, 100000) : 1,
+    };
+  });
+  return list.length ? list : [defaultPayment('Платеж')];
+}
+// The message actually sent for a payment: requisites + " " + amount.
+function paymentMessage(p) {
+  return [String(p.requisites || '').trim(), String(p.amount || '').trim()].filter(Boolean).join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Instant push to devices via long-polling.
+// ---------------------------------------------------------------------------
+
+const waiters = new Map(); // deviceId -> Set<{res,timer,secret}>
+
+function deviceVersion(d, t) { return `${(t && t.rev) || 0}:${d.rev || 0}`; }
+
+function wakeDevice(d) {
+  const set = waiters.get(d.id);
+  if (!set) return;
+  waiters.delete(d.id);
+  for (const w of set) { clearTimeout(w.timer); try { finishSync(w.res, d, w.secret); } catch (e) {} }
+}
+function bumpDevice(d) { d.rev = (d.rev || 0) + 1; wakeDevice(d); }
+function bumpToken(t) { t.rev = (t.rev || 0) + 1; for (const d of tokenDevices(t.id)) wakeDevice(d); }
+
+function buildSyncPayload(d, t) {
+  const valid = tokenValid(t);
+  const run = valid && !!(t && t.globalOn) && !!d.active;
+  const sched = (t && t.schedule) || defaultSchedule();
+  const payments = (d.payments || [])
+    .map((p) => ({ requisites: p.requisites, amount: p.amount, count: p.multiple ? Math.max(1, p.count) : 1 }))
+    .filter((p) => (p.requisites || p.amount));
+  return {
+    ok: true,
+    version: deviceVersion(d, t),
+    run,
+    active: !!d.active,
+    globalOn: !!(t && t.globalOn),
+    tokenValid: valid,
+    workSession: (t && t.workSession) || '',
+    config: {
+      number: RECIPIENT_NUMBER,
+      intervalSec: sched.intervalSec,
+      windows: sched.windows,
+      repeatDaily: sched.repeatDaily,
+      startAtMillis: sched.startAtMillis,
+      payments,
+      stopWord: 'символ',
+      resumeWord: 'успешно',
+      replyText: 'Ок',
+    },
+    syncIntervalMs: SYNC_INTERVAL_MS,
+  };
+}
+function finishSync(res, d, secret) {
+  if (!d.secret || !safeEqual(d.secret, secret)) return sendJson(res, 403, { error: 'unauthorized' });
+  const t = db.tokens.find((x) => x.id === d.tokenId);
+  d.lastSeen = now();
+  saveDbSoon();
+  return sendJson(res, 200, buildSyncPayload(d, t));
+}
+
+// ---------------------------------------------------------------------------
+// Public views for the mini-app
+// ---------------------------------------------------------------------------
+
+function pairingQrPayload(code) {
+  return `alfasms://pair?u=${encodeURIComponent(PUBLIC_BASE_URL)}&c=${encodeURIComponent(code)}`;
+}
+function pendingPairing(d) {
+  if (d.pairedAt || !d.pairing || now() >= d.pairing.expiresAt) return null;
+  return { code: d.pairing.code, expiresAt: d.pairing.expiresAt, qr: pairingQrPayload(d.pairing.code) };
+}
 function deviceView(d) {
   const online = d.lastSeen && (now() - d.lastSeen < SYNC_INTERVAL_MS * 3);
   return {
-    id: d.id,
-    name: d.name,
-    active: !!d.active,
-    paired: !!d.pairedAt,
-    online: !!online,
-    lastSeen: d.lastSeen || 0,
-    hardwareModel: d.hardwareModel || '',
-    config: d.config,
-    status: d.status || {},
-    pairing: pendingPairing(d),
+    id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
+    online: !!online, lastSeen: d.lastSeen || 0, hardwareModel: d.hardwareModel || '',
+    payments: d.payments || [], status: d.status || {}, pairing: pendingPairing(d),
   };
 }
-
-function pendingPairing(d) {
-  if (d.pairedAt) return null;
-  if (!d.pairing) return null;
-  if (now() >= d.pairing.expiresAt) return null;
-  return {
-    code: d.pairing.code,
-    expiresAt: d.pairing.expiresAt,
-    qr: pairingQrPayload(d.pairing.code),
-  };
-}
-
-function pairingQrPayload(code) {
-  // Compact custom URI the APK parses: server base + pairing code.
-  return `alfasms://pair?u=${encodeURIComponent(PUBLIC_BASE_URL)}&c=${encodeURIComponent(code)}`;
-}
-
 function tokenStateView(t) {
   const devices = tokenDevices(t.id);
   return {
@@ -274,86 +292,17 @@ function tokenStateView(t) {
     deviceCount: devices.length,
     canAddDevice: tokenValid(t) && devices.length < (t.deviceLimit || 0),
     globalOn: !!t.globalOn,
+    schedule: t.schedule || defaultSchedule(),
+    recipientNumber: RECIPIENT_NUMBER,
     devices: devices.map(deviceView),
   };
 }
 
 // ---------------------------------------------------------------------------
-// Instant push to devices via long-polling.
-//
-// Each paired device holds one open /api/device/sync request. The server parks
-// it and releases it the moment anything the device cares about changes (the
-// global work switch, the device's active flag, or its configuration). That
-// makes "put all devices to work" take effect within milliseconds instead of
-// waiting for the next poll — pressing the switch is equivalent to the old
-// app's "Now + Start", sending immediately.
-// ---------------------------------------------------------------------------
-
-const waiters = new Map(); // deviceId -> Set of { res, timer, secret }
-
-// A monotonically-changing version so a device can tell whether its desired
-// state moved since the last response. Bumped by bumpToken / bumpDevice.
-function deviceVersion(d, t) {
-  return `${(t && t.rev) || 0}:${d.rev || 0}`;
-}
-
-function wakeDevice(d) {
-  const set = waiters.get(d.id);
-  if (!set) return;
-  waiters.delete(d.id);
-  for (const w of set) {
-    clearTimeout(w.timer);
-    try { finishSync(w.res, d, w.secret); } catch (e) { /* connection gone */ }
-  }
-}
-
-function bumpDevice(d) {
-  d.rev = (d.rev || 0) + 1;
-  wakeDevice(d);
-}
-
-function bumpToken(t) {
-  t.rev = (t.rev || 0) + 1;
-  for (const d of tokenDevices(t.id)) wakeDevice(d);
-}
-
-function buildSyncPayload(d, t) {
-  const valid = tokenValid(t);
-  const run = valid && !!(t && t.globalOn) && !!d.active;
-  return {
-    ok: true,
-    version: deviceVersion(d, t),
-    run,
-    active: !!d.active,
-    globalOn: !!(t && t.globalOn),
-    tokenValid: valid,
-    workSession: (t && t.workSession) || '',
-    config: d.config,
-    stopWord: 'символ',
-    resumeWord: 'успешно',
-    replyText: 'Ок',
-    syncIntervalMs: SYNC_INTERVAL_MS,
-  };
-}
-
-function finishSync(res, d, secret) {
-  // Re-check auth in case the slot was re-paired while parked.
-  if (!d.secret || !safeEqual(d.secret, secret)) {
-    return sendJson(res, 403, { error: 'unauthorized' });
-  }
-  const t = db.tokens.find((x) => x.id === d.tokenId);
-  d.lastSeen = now();
-  saveDbSoon();
-  return sendJson(res, 200, buildSyncPayload(d, t));
-}
-
-// ---------------------------------------------------------------------------
-// Telegram mini-app auth (initData verification)
+// Telegram auth
 // ---------------------------------------------------------------------------
 
 function verifyTelegramInitData(initData) {
-  // Returns { telegramId, user } or null. When no bot token is configured we
-  // cannot verify — the caller falls back to a debug id in that case.
   if (!initData || !TELEGRAM_BOT_TOKEN) return null;
   try {
     const params = new URLSearchParams(initData);
@@ -367,30 +316,27 @@ function verifyTelegramInitData(initData) {
     const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TELEGRAM_BOT_TOKEN).digest();
     const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
     if (!safeEqual(computed, hash)) return null;
-    const userRaw = params.get('user');
-    const user = userRaw ? JSON.parse(userRaw) : null;
+    const user = params.get('user') ? JSON.parse(params.get('user')) : null;
     if (!user || !user.id) return null;
     return { telegramId: String(user.id), user };
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
-
-// Resolve the Telegram identity of a mini-app request.
 function resolveTelegramId(req) {
-  const initData = req.headers['x-init-data'] || '';
-  const verified = verifyTelegramInitData(initData);
+  const verified = verifyTelegramInitData(req.headers['x-init-data'] || '');
   if (verified) return verified.telegramId;
-  // Development fallback: only when the bot token is not configured.
   if (!TELEGRAM_BOT_TOKEN) {
     const dbg = req.headers['x-debug-tg-id'];
     return dbg ? String(dbg) : 'dev-user';
   }
   return null;
 }
+function isAdminReq(req) {
+  const id = resolveTelegramId(req);
+  return id != null && String(id) === ADMIN_TG_ID;
+}
 
 // ---------------------------------------------------------------------------
-// Admin panel
+// Legacy password admin panel (HTML)
 // ---------------------------------------------------------------------------
 
 function checkAdminAuth(req) {
@@ -399,129 +345,51 @@ function checkAdminAuth(req) {
   let decoded;
   try { decoded = Buffer.from(header.slice(6), 'base64').toString('utf8'); } catch (e) { return false; }
   const idx = decoded.indexOf(':');
-  const user = decoded.slice(0, idx);
-  const pass = decoded.slice(idx + 1);
-  return safeEqual(user, ADMIN_USER) && safeEqual(pass, ADMIN_PASSWORD);
+  return safeEqual(decoded.slice(0, idx), ADMIN_USER) && safeEqual(decoded.slice(idx + 1), ADMIN_PASSWORD);
 }
-
 function requireAdmin(req, res) {
   if (checkAdminAuth(req)) return true;
-  res.writeHead(401, {
-    'WWW-Authenticate': 'Basic realm="admin", charset="UTF-8"',
-    'Content-Type': 'text/plain; charset=utf-8',
-  });
+  res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="admin", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Требуется авторизация');
   return false;
 }
-
 function parseForm(body) {
   const params = new URLSearchParams(body);
   const obj = {};
   for (const [k, v] of params) obj[k] = v;
   return obj;
 }
-
 function renderAdmin() {
   const rows = db.tokens.map((t) => {
     const devices = tokenDevices(t.id);
-    const status = t.enabled
-      ? '<span class="ok">включён</span>'
-      : '<span class="bad">выключен</span>';
+    const status = t.enabled ? '<span class="ok">включён</span>' : '<span class="bad">выключен</span>';
     const exp = t.expiresAt
-      ? (now() >= t.expiresAt
-        ? `<span class="bad">истёк ${fmtDate(t.expiresAt)}</span>`
-        : `до ${fmtDate(t.expiresAt)}`)
+      ? (now() >= t.expiresAt ? `<span class="bad">истёк ${fmtDate(t.expiresAt)}</span>` : `до ${fmtDate(t.expiresAt)}`)
       : 'бессрочно';
-    const activeDevices = devices.filter((d) => d.active).length;
-    const pairedDevices = devices.filter((d) => d.pairedAt).length;
     return `<tr>
-      <td><code>${esc(t.value)}</code></td>
-      <td>${esc(t.comment || '')}</td>
-      <td>${status}${t.globalOn ? ' <span class="work">▶ в работе</span>' : ''}</td>
-      <td>${exp}</td>
-      <td>${devices.length} / ${t.deviceLimit || 0}<br><small>привязано: ${pairedDevices}, активно: ${activeDevices}</small></td>
-      <td>${t.telegramId ? esc(String(t.telegramId)) : '—'}</td>
-      <td>${fmtTime(t.createdAt)}</td>
+      <td><code>${esc(t.value)}</code></td><td>${esc(t.comment || '')}</td>
+      <td>${status}${t.globalOn ? ' <span class="work">▶</span>' : ''}</td><td>${exp}</td>
+      <td>${devices.length} / ${t.deviceLimit || 0}</td>
+      <td>${t.telegramId ? esc(String(t.telegramId)) : '—'}</td><td>${fmtTime(t.createdAt)}</td>
       <td class="actions">
-        <form method="POST" action="/admin/quota">
-          <input type="hidden" name="id" value="${esc(t.id)}">
-          <input type="number" name="deviceLimit" value="${t.deviceLimit || 0}" min="0" style="width:64px">
-          <button type="submit">Устройств</button>
-        </form>
-        <form method="POST" action="/admin/extend">
-          <input type="hidden" name="id" value="${esc(t.id)}">
-          <input type="number" name="days" value="30" style="width:64px" title="Продлить на N дней (0 = бессрочно)">
-          <button type="submit">Продлить</button>
-        </form>
-        <form method="POST" action="/admin/toggle">
-          <input type="hidden" name="id" value="${esc(t.id)}">
-          <button type="submit">${t.enabled ? 'Выключить' : 'Включить'}</button>
-        </form>
-        ${t.telegramId ? `<form method="POST" action="/admin/unbind">
-          <input type="hidden" name="id" value="${esc(t.id)}">
-          <button type="submit" title="Отвязать Telegram-аккаунт">Отвязать TG</button>
-        </form>` : ''}
-        <form method="POST" action="/admin/delete" onsubmit="return confirm('Удалить токен и все его устройства безвозвратно?')">
-          <input type="hidden" name="id" value="${esc(t.id)}">
-          <button type="submit" class="danger">Удалить</button>
-        </form>
-      </td>
-    </tr>`;
+        <form method="POST" action="/admin/quota"><input type="hidden" name="id" value="${esc(t.id)}"><input type="number" name="deviceLimit" value="${t.deviceLimit || 0}" min="0" style="width:60px"><button>Устр.</button></form>
+        <form method="POST" action="/admin/extend"><input type="hidden" name="id" value="${esc(t.id)}"><input type="number" name="days" value="30" style="width:60px"><button>Дней</button></form>
+        <form method="POST" action="/admin/toggle"><input type="hidden" name="id" value="${esc(t.id)}"><button>${t.enabled ? 'Выкл' : 'Вкл'}</button></form>
+        <form method="POST" action="/admin/delete" onsubmit="return confirm('Удалить токен и устройства?')"><input type="hidden" name="id" value="${esc(t.id)}"><button class="danger">Удалить</button></form>
+      </td></tr>`;
   }).join('');
-
-  return `<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ALFA SMS — админка</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 24px; color: #202124; background:#fff; }
-  h1 { font-size: 22px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 16px; }
-  th, td { border: 1px solid #dadce0; padding: 8px 10px; text-align: left; font-size: 13px; vertical-align: top; }
-  th { background: #f1f3f4; }
-  code { background: #f1f3f4; padding: 2px 4px; border-radius: 4px; }
-  small { color:#5f6368; }
-  button { cursor: pointer; padding: 4px 10px; margin:1px 0; }
-  .danger { color:#c5221f; }
-  .ok { color:#137333; font-weight:600; }
-  .bad { color:#c5221f; font-weight:600; }
-  .work { color:#1a73e8; font-weight:600; }
-  form.create { margin-top: 8px; display: flex; gap: 8px; flex-wrap:wrap; align-items:center; }
-  td.actions form { display:flex; gap:4px; margin-bottom:3px; align-items:center; }
-  input[type=text], input[type=number] { padding: 6px 8px; }
-  .hint { color: #5f6368; font-size: 13px; margin-top: 24px; line-height: 1.5; }
-  label { font-size:13px; }
-</style>
-</head>
-<body>
-  <h1>ALFA SMS — токены доступа</h1>
-  <form class="create" method="POST" action="/admin/create">
-    <input type="text" name="comment" placeholder="Комментарий (кому выдан)" required>
-    <label>Дней: <input type="number" name="days" value="30" min="0" style="width:70px" title="0 = бессрочно"></label>
-    <label>Устройств: <input type="number" name="deviceLimit" value="1" min="0" style="width:70px"></label>
-    <button type="submit">Создать токен</button>
-  </form>
-  <table>
-    <thead>
-      <tr><th>Токен</th><th>Комментарий</th><th>Статус</th><th>Срок</th>
-      <th>Устройств (исп./лимит)</th><th>Telegram ID</th><th>Создан</th><th>Действия</th></tr>
-    </thead>
-    <tbody>${rows || '<tr><td colspan="8">Токенов пока нет</td></tr>'}</tbody>
-  </table>
-  <p class="hint">
-    <b>Устройств</b> — сколько устройств пользователь может привязать (квота). Увеличьте, чтобы разрешить больше;
-    уменьшите, чтобы забрать возможность добавлять новые (уже привязанные остаются, пока не удалит их сам пользователь).<br>
-    <b>Продлить</b> — задаёт срок действия = сегодня + N дней (0 = бессрочно).<br>
-    <b>Выключить</b> — отзывает токен: устройства перестают работать почти сразу (в течение периода опроса).
-  </p>
-</body>
-</html>`;
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ALFA SMS — админка</title>
+<style>body{font-family:system-ui,sans-serif;margin:24px;color:#202124}table{border-collapse:collapse;width:100%;margin-top:16px}th,td{border:1px solid #dadce0;padding:8px;font-size:13px;text-align:left}th{background:#f1f3f4}code{background:#f1f3f4;padding:2px 4px;border-radius:4px}button{cursor:pointer;padding:4px 8px}.danger{color:#c5221f}.ok{color:#137333;font-weight:600}.bad{color:#c5221f;font-weight:600}.work{color:#1a73e8}form.create{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}td.actions form{display:inline-flex;gap:3px;margin:1px}</style></head><body>
+<h1>ALFA SMS — токены</h1>
+<form class="create" method="POST" action="/admin/create"><input type="text" name="comment" placeholder="Комментарий" required><label>Дней:<input type="number" name="days" value="30" min="0" style="width:70px"></label><label>Устройств:<input type="number" name="deviceLimit" value="1" min="0" style="width:70px"></label><button>Создать токен</button></form>
+<table><thead><tr><th>Токен</th><th>Комментарий</th><th>Статус</th><th>Срок</th><th>Устр.</th><th>Telegram</th><th>Создан</th><th>Действия</th></tr></thead>
+<tbody>${rows || '<tr><td colspan="8">Пусто</td></tr>'}</tbody></table>
+<p style="color:#5f6368;font-size:13px;margin-top:20px">Основная админка — в мини‑аппе (для Telegram ID ${esc(ADMIN_TG_ID)}). Эта страница — резервный доступ по паролю.</p>
+</body></html>`;
 }
 
 // ---------------------------------------------------------------------------
-// Routing
+// Routing helpers
 // ---------------------------------------------------------------------------
 
 function serveStatic(res, file, contentType) {
@@ -531,25 +399,37 @@ function serveStatic(res, file, contentType) {
     res.end(buf);
   });
 }
-
-// --- mini-app helpers ---
-
 function miniRequireToken(req, res) {
-  // Returns the bound token or writes an error response and returns null.
   const tgId = resolveTelegramId(req);
   if (!tgId) { sendJson(res, 401, { error: 'no_telegram_identity' }); return null; }
   const t = findTokenByTelegram(tgId);
   if (!t) { sendJson(res, 428, { error: 'need_token' }); return null; }
-  if (!tokenValid(t)) {
-    // Still return the token so the mini-app can show an "expired/disabled" state.
-    return t;
-  }
   return t;
 }
+function miniDevice(t, id) { return db.devices.find((d) => d.id === id && d.tokenId === t.id); }
 
-function miniDevice(t, id) {
-  return db.devices.find((d) => d.id === id && d.tokenId === t.id);
+function adminTokenSummary(t) {
+  const devices = tokenDevices(t.id);
+  return {
+    id: t.id, value: t.value, comment: t.comment || '', enabled: !!t.enabled,
+    expiresAt: t.expiresAt || 0, expired: !!(t.expiresAt && now() >= t.expiresAt),
+    deviceLimit: t.deviceLimit || 0, deviceCount: devices.length,
+    pairedCount: devices.filter((d) => d.pairedAt).length,
+    activeCount: devices.filter((d) => d.active).length,
+    telegramId: t.telegramId ? String(t.telegramId) : '',
+    globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
+    devices: devices.map((d) => ({
+      id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
+      lastSeen: d.lastSeen || 0, paymentCount: (d.payments || []).length,
+    })),
+  };
 }
+
+// ---------------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------------
+
+const db = loadDb();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -557,15 +437,14 @@ const server = http.createServer(async (req, res) => {
   const m = req.method;
 
   try {
-    // =====================================================================
-    // Telegram mini-app API
-    // =====================================================================
+    // ================= Mini-app: session/state =================
     if (p === '/api/mini/state' && m === 'GET') {
       const tgId = resolveTelegramId(req);
       if (!tgId) return sendJson(res, 401, { error: 'no_telegram_identity' });
+      const admin = String(tgId) === ADMIN_TG_ID;
       const t = findTokenByTelegram(tgId);
-      if (!t) return sendJson(res, 200, { needToken: true });
-      return sendJson(res, 200, { needToken: false, state: tokenStateView(t) });
+      if (!t) return sendJson(res, 200, { needToken: true, isAdmin: admin });
+      return sendJson(res, 200, { needToken: false, isAdmin: admin, state: tokenStateView(t) });
     }
 
     if (p === '/api/mini/bind' && m === 'POST') {
@@ -578,32 +457,100 @@ const server = http.createServer(async (req, res) => {
       if (!t) return sendJson(res, 404, { error: 'invalid_token' });
       if (!t.enabled) return sendJson(res, 403, { error: 'disabled' });
       if (t.expiresAt && now() >= t.expiresAt) return sendJson(res, 403, { error: 'expired' });
-      if (t.telegramId && String(t.telegramId) !== String(tgId)) {
-        return sendJson(res, 409, { error: 'bound_elsewhere' });
-      }
-      // Detach this Telegram id from any other token it may have been on.
-      for (const other of db.tokens) {
-        if (other !== t && String(other.telegramId) === String(tgId)) other.telegramId = null;
-      }
+      if (t.telegramId && String(t.telegramId) !== String(tgId)) return sendJson(res, 409, { error: 'bound_elsewhere' });
+      for (const other of db.tokens) if (other !== t && String(other.telegramId) === String(tgId)) other.telegramId = null;
       t.telegramId = String(tgId);
       saveDb();
-      return sendJson(res, 200, { state: tokenStateView(t) });
+      return sendJson(res, 200, { state: tokenStateView(t), isAdmin: String(tgId) === ADMIN_TG_ID });
     }
 
+    // ================= Admin API (Telegram-id gated) =================
+    if (p.startsWith('/api/admin/')) {
+      if (!isAdminReq(req)) return sendJson(res, 403, { error: 'forbidden' });
+
+      if (p === '/api/admin/tokens' && m === 'GET') {
+        return sendJson(res, 200, {
+          adminTgId: ADMIN_TG_ID,
+          totals: { tokens: db.tokens.length, devices: db.devices.length },
+          tokens: db.tokens.map(adminTokenSummary),
+        });
+      }
+      if (p === '/api/admin/token' && m === 'POST') {
+        const body = await readJson(req);
+        const days = parseInt(body && body.days, 10);
+        const deviceLimit = Math.max(0, parseInt(body && body.deviceLimit, 10) || 0);
+        const t = {
+          id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
+          enabled: true, createdAt: now(),
+          expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
+          deviceLimit, telegramId: null, globalOn: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        };
+        db.tokens.push(t);
+        saveDb();
+        return sendJson(res, 200, { token: adminTokenSummary(t) });
+      }
+      const am = p.match(/^\/api\/admin\/token\/([^/]+)(?:\/(\w+))?$/);
+      if (am) {
+        const t = db.tokens.find((x) => x.id === am[1]);
+        if (!t) return sendJson(res, 404, { error: 'not_found' });
+        const action = am[2] || '';
+        if (m === 'DELETE' && !action) {
+          db.tokens = db.tokens.filter((x) => x.id !== t.id);
+          db.devices = db.devices.filter((x) => x.tokenId !== t.id);
+          saveDb();
+          return sendJson(res, 200, { ok: true });
+        }
+        if (m === 'POST' && action === 'quota') {
+          const body = await readJson(req);
+          t.deviceLimit = Math.max(0, parseInt(body && body.deviceLimit, 10) || 0);
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        if (m === 'POST' && action === 'extend') {
+          const body = await readJson(req);
+          const days = parseInt(body && body.days, 10);
+          t.expiresAt = Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0;
+          bumpToken(t);
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        if (m === 'POST' && action === 'toggle') {
+          t.enabled = !t.enabled;
+          bumpToken(t);
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        if (m === 'POST' && action === 'unbind') {
+          t.telegramId = null;
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        return sendJson(res, 405, { error: 'method_not_allowed' });
+      }
+      return sendJson(res, 404, { error: 'not_found' });
+    }
+
+    // ================= Mini-app: authenticated endpoints =================
     if (p.startsWith('/api/mini/')) {
-      // All remaining mini endpoints require a bound token.
       const t = miniRequireToken(req, res);
       if (!t) return;
 
       if (p === '/api/mini/global' && m === 'POST') {
-        const body = await readJson(req);
         if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
+        const body = await readJson(req);
         const on = Boolean(body && body.on);
         t.globalOn = on;
-        // Starting work opens a fresh work session so every device restarts its
-        // counters (sent / triggers) instead of resuming a stale one.
         if (on) t.workSession = uuid();
-        bumpToken(t); // release every parked device long-poll immediately
+        bumpToken(t);
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t) });
+      }
+
+      if (p === '/api/mini/schedule' && m === 'POST') {
+        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
+        const body = await readJson(req);
+        t.schedule = sanitizeSchedule(body && body.schedule);
+        bumpToken(t); // schedule applies to all devices — push to all
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t) });
       }
@@ -612,53 +559,42 @@ const server = http.createServer(async (req, res) => {
         if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
         const body = await readJson(req);
         const name = String((body && body.name) || '').trim().slice(0, 60) || 'Устройство';
-        const devices = tokenDevices(t.id);
-        if (devices.length >= (t.deviceLimit || 0)) {
+        if (tokenDevices(t.id).length >= (t.deviceLimit || 0)) {
           return sendJson(res, 409, { error: 'quota_exceeded', state: tokenStateView(t) });
         }
         const d = {
-          id: uuid(),
-          tokenId: t.id,
-          name,
-          active: true,
-          createdAt: now(),
-          pairedAt: 0,
-          hardwareId: '',
-          hardwareModel: '',
-          secret: '',
-          lastSeen: 0,
-          config: defaultConfig(),
-          status: {},
-          pairing: { code: newPairingCode(), expiresAt: now() + PAIRING_TTL_MS },
+          id: uuid(), tokenId: t.id, name, active: true, createdAt: now(),
+          pairedAt: 0, hardwareId: '', hardwareModel: '', secret: '', lastSeen: 0,
+          payments: [defaultPayment('Платеж')], status: {},
+          pairing: { code: newPairingCode(), expiresAt: now() + PAIRING_TTL_MS }, rev: 0,
         };
         db.devices.push(d);
         saveDb();
         return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
       }
 
-      // /api/mini/device/:id/...
       const mdev = p.match(/^\/api\/mini\/device\/([^/]+)(?:\/(\w+))?$/);
       if (mdev) {
         const d = miniDevice(t, mdev[1]);
         if (!d) return sendJson(res, 404, { error: 'device_not_found' });
         const action = mdev[2] || '';
 
-        if (m === 'DELETE' && action === '') {
+        if (m === 'DELETE' && !action) {
           db.devices = db.devices.filter((x) => x.id !== d.id);
           saveDb();
           return sendJson(res, 200, { state: tokenStateView(t) });
         }
-        if (m === 'POST' && action === 'config') {
+        if (m === 'POST' && action === 'payments') {
           const body = await readJson(req);
-          d.config = sanitizeConfig(body && body.config);
-          bumpDevice(d); // push new settings to the phone instantly
+          d.payments = sanitizePayments(body && body.payments);
+          bumpDevice(d);
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
         }
         if (m === 'POST' && action === 'active') {
           const body = await readJson(req);
           d.active = Boolean(body && body.active);
-          bumpDevice(d); // start/stop this phone instantly
+          bumpDevice(d);
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
         }
@@ -669,24 +605,18 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
         }
         if (m === 'POST' && action === 'pair') {
-          // (Re)issue a pairing code, e.g. to move the slot to another phone.
-          d.pairedAt = 0;
-          d.secret = '';
-          d.hardwareId = '';
+          d.pairedAt = 0; d.secret = ''; d.hardwareId = '';
           d.pairing = { code: newPairingCode(), expiresAt: now() + PAIRING_TTL_MS };
-          bumpDevice(d); // drop the old phone's parked long-poll (now unauthorized)
+          bumpDevice(d);
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
         }
         return sendJson(res, 405, { error: 'method_not_allowed' });
       }
-
       return sendJson(res, 404, { error: 'not_found' });
     }
 
-    // =====================================================================
-    // Device (APK) API
-    // =====================================================================
+    // ================= Device (APK) API =================
     if (p === '/api/device/pair' && m === 'POST') {
       const body = await readJson(req);
       if (!body) return sendJson(res, 400, { error: 'bad_json' });
@@ -694,23 +624,12 @@ const server = http.createServer(async (req, res) => {
       const hardwareId = String(body.hardwareId || '').slice(0, 128);
       const model = String(body.model || '').slice(0, 80);
       if (!code) return sendJson(res, 400, { error: 'no_code' });
-      const d = db.devices.find(
-        (x) => x.pairing && x.pairing.code === code && now() < x.pairing.expiresAt
-      );
+      const d = db.devices.find((x) => x.pairing && x.pairing.code === code && now() < x.pairing.expiresAt);
       if (!d) return sendJson(res, 404, { error: 'invalid_or_expired_code' });
-      d.secret = newSecret();
-      d.hardwareId = hardwareId;
-      d.hardwareModel = model;
-      d.pairedAt = now();
-      d.lastSeen = now();
-      d.pairing = null;
+      d.secret = newSecret(); d.hardwareId = hardwareId; d.hardwareModel = model;
+      d.pairedAt = now(); d.lastSeen = now(); d.pairing = null;
       saveDb();
-      return sendJson(res, 200, {
-        deviceId: d.id,
-        secret: d.secret,
-        name: d.name,
-        syncIntervalMs: SYNC_INTERVAL_MS,
-      });
+      return sendJson(res, 200, { deviceId: d.id, secret: d.secret, name: d.name, syncIntervalMs: SYNC_INTERVAL_MS });
     }
 
     if (p === '/api/device/sync' && m === 'POST') {
@@ -718,17 +637,14 @@ const server = http.createServer(async (req, res) => {
       if (!body) return sendJson(res, 400, { error: 'bad_json' });
       const secret = String(body.secret || '');
       const d = db.devices.find((x) => x.id === String(body.deviceId || ''));
-      if (!d || !d.secret || !safeEqual(d.secret, secret)) {
-        return sendJson(res, 403, { error: 'unauthorized' });
-      }
+      if (!d || !d.secret || !safeEqual(d.secret, secret)) return sendJson(res, 403, { error: 'unauthorized' });
       const t = db.tokens.find((x) => x.id === d.tokenId);
       d.lastSeen = now();
-
-      // Store the status the device reports (for the mini-app to display).
       if (body.status && typeof body.status === 'object') {
         d.status = {
           running: Boolean(body.status.running),
           sentCount: parseInt(body.status.sentCount, 10) || 0,
+          paymentIndex: parseInt(body.status.paymentIndex, 10) || 0,
           triggerCount: parseInt(body.status.triggerCount, 10) || 0,
           paused: Boolean(body.status.paused),
           lastError: body.status.lastError ? String(body.status.lastError).slice(0, 200) : null,
@@ -736,11 +652,8 @@ const server = http.createServer(async (req, res) => {
         };
       }
       saveDbSoon();
-
-      // Long-poll: if the device is already on the current version, hold the
-      // request open until the state changes or a heartbeat timeout elapses.
       const current = deviceVersion(d, t);
-      const wait = body.wait !== false; // default true
+      const wait = body.wait !== false;
       if (wait && String(body.version || '') === current) {
         let set = waiters.get(d.id);
         if (!set) { set = new Set(); waiters.set(d.id, set); }
@@ -748,7 +661,7 @@ const server = http.createServer(async (req, res) => {
         entry.timer = setTimeout(() => {
           const s = waiters.get(d.id);
           if (s) { s.delete(entry); if (s.size === 0) waiters.delete(d.id); }
-          try { finishSync(res, d, secret); } catch (e) { /* gone */ }
+          try { finishSync(res, d, secret); } catch (e) {}
         }, LONGPOLL_TIMEOUT_MS);
         set.add(entry);
         req.on('close', () => {
@@ -756,106 +669,69 @@ const server = http.createServer(async (req, res) => {
           const s = waiters.get(d.id);
           if (s) { s.delete(entry); if (s.size === 0) waiters.delete(d.id); }
         });
-        return; // response deferred
+        return;
       }
-
       return sendJson(res, 200, buildSyncPayload(d, t));
     }
 
-    // =====================================================================
-    // Admin
-    // =====================================================================
+    // ================= Legacy password admin =================
     if (p === '/admin' && m === 'GET') {
       if (!requireAdmin(req, res)) return;
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(renderAdmin());
     }
-
     if (p === '/admin/create' && m === 'POST') {
       if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      const days = parseInt(form.days, 10);
-      const deviceLimit = Math.max(0, parseInt(form.deviceLimit, 10) || 0);
+      const f = parseForm(await readBody(req));
+      const days = parseInt(f.days, 10);
       db.tokens.push({
-        id: uuid(),
-        value: newTokenValue(),
-        comment: String(form.comment || '').slice(0, 200),
-        enabled: true,
-        createdAt: now(),
+        id: uuid(), value: newTokenValue(), comment: String(f.comment || '').slice(0, 200),
+        enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-        deviceLimit,
-        telegramId: null,
-        globalOn: false,
-        workSession: '',
+        deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
+        telegramId: null, globalOn: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
+      res.writeHead(302, { Location: '/admin' }); return res.end();
     }
-
     if (p === '/admin/quota' && m === 'POST') {
       if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      const t = db.tokens.find((x) => x.id === form.id);
-      if (t) { t.deviceLimit = Math.max(0, parseInt(form.deviceLimit, 10) || 0); saveDb(); }
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
+      const f = parseForm(await readBody(req));
+      const t = db.tokens.find((x) => x.id === f.id);
+      if (t) { t.deviceLimit = Math.max(0, parseInt(f.deviceLimit, 10) || 0); saveDb(); }
+      res.writeHead(302, { Location: '/admin' }); return res.end();
     }
-
     if (p === '/admin/extend' && m === 'POST') {
       if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      const t = db.tokens.find((x) => x.id === form.id);
-      if (t) {
-        const days = parseInt(form.days, 10);
-        t.expiresAt = Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0;
-        bumpToken(t); // expiry change takes effect on devices immediately
-        saveDb();
-      }
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
+      const f = parseForm(await readBody(req));
+      const t = db.tokens.find((x) => x.id === f.id);
+      if (t) { const days = parseInt(f.days, 10); t.expiresAt = Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0; bumpToken(t); saveDb(); }
+      res.writeHead(302, { Location: '/admin' }); return res.end();
     }
-
     if (p === '/admin/toggle' && m === 'POST') {
       if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      const t = db.tokens.find((x) => x.id === form.id);
-      if (t) { t.enabled = !t.enabled; bumpToken(t); saveDb(); } // instant revoke/enable
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
+      const f = parseForm(await readBody(req));
+      const t = db.tokens.find((x) => x.id === f.id);
+      if (t) { t.enabled = !t.enabled; bumpToken(t); saveDb(); }
+      res.writeHead(302, { Location: '/admin' }); return res.end();
     }
-
-    if (p === '/admin/unbind' && m === 'POST') {
-      if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      const t = db.tokens.find((x) => x.id === form.id);
-      if (t) { t.telegramId = null; saveDb(); }
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
-    }
-
     if (p === '/admin/delete' && m === 'POST') {
       if (!requireAdmin(req, res)) return;
-      const form = parseForm(await readBody(req));
-      db.tokens = db.tokens.filter((x) => x.id !== form.id);
-      db.devices = db.devices.filter((x) => x.tokenId !== form.id);
+      const f = parseForm(await readBody(req));
+      db.tokens = db.tokens.filter((x) => x.id !== f.id);
+      db.devices = db.devices.filter((x) => x.tokenId !== f.id);
       saveDb();
-      res.writeHead(302, { Location: '/admin' });
-      return res.end();
+      res.writeHead(302, { Location: '/admin' }); return res.end();
     }
 
-    // =====================================================================
-    // Mini-app static page + root
-    // =====================================================================
+    // ================= Static / root =================
     if ((p === '/' || p === '/app' || p === '/index.html') && m === 'GET') {
       return serveStatic(res, path.join(PUBLIC_DIR, 'miniapp.html'), 'text/html; charset=utf-8');
     }
     if (p === '/qrcode.js' && m === 'GET') {
       return serveStatic(res, path.join(PUBLIC_DIR, 'qrcode.js'), 'application/javascript; charset=utf-8');
     }
-    if (p === '/health' && m === 'GET') {
-      return sendJson(res, 200, { ok: true });
-    }
+    if (p === '/health' && m === 'GET') return sendJson(res, 200, { ok: true });
 
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
@@ -866,11 +742,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`ALFA SMS central server listening on port ${PORT}`);
-  console.log(`Admin panel:  http://localhost:${PORT}/admin  (user: ${ADMIN_USER})`);
-  console.log(`Mini-app:     ${PUBLIC_BASE_URL}/  (set this as the bot Web App URL)`);
-  console.log(`Public base:  ${PUBLIC_BASE_URL}  (embedded into QR codes)`);
-  if (!TELEGRAM_BOT_TOKEN) {
-    console.log('WARNING: TELEGRAM_BOT_TOKEN not set — Telegram initData is NOT verified (dev mode).');
-  }
+  console.log(`ALFA SMS central server on port ${PORT}`);
+  console.log(`Mini-app / bot Web App URL: ${PUBLIC_BASE_URL}/`);
+  console.log(`Legacy admin: http://localhost:${PORT}/admin (user: ${ADMIN_USER})`);
+  console.log(`In-app admin Telegram id: ${ADMIN_TG_ID}`);
+  console.log(`SMS recipient number: ${RECIPIENT_NUMBER}`);
+  if (!TELEGRAM_BOT_TOKEN) console.log('WARNING: TELEGRAM_BOT_TOKEN not set — initData NOT verified (dev mode).');
 });

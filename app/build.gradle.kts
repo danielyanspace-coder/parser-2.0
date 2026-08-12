@@ -18,7 +18,7 @@ android {
         // Default control server. The real server URL is delivered inside the QR
         // code the user scans, so this is only a fallback / display default.
         // Overridable with -PserverUrl=...
-        val serverUrl = (project.findProperty("serverUrl") as String?) ?: "https://alfa-vpn.ru"
+        val serverUrl = (project.findProperty("serverUrl") as String?) ?: "https://sms.alfa-vpn.ru"
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"$serverUrl\"")
     }
 

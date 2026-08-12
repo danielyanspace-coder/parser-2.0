@@ -56,6 +56,7 @@ object ControlClient {
         val status = JSONObject()
             .put("running", DeviceStore.run(c) && !DeviceStore.isPaused(c) && !DeviceStore.isSessionDone(c))
             .put("sentCount", SenderStatus.sentCount)
+            .put("paymentIndex", DeviceStore.paymentIndex(c))
             .put("triggerCount", DeviceStore.triggerCount(c))
             .put("paused", DeviceStore.isPaused(c))
             .put("lastError", SenderStatus.lastError ?: JSONObject.NULL)

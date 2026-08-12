@@ -207,14 +207,13 @@ class MainActivity : AppCompatActivity() {
         val working = DeviceStore.run(this) && DeviceStore.active(this) && DeviceStore.tokenValid(this)
         if (!working) return base
 
-        val count = DeviceStore.triggerCount(this)
-        val limit = DeviceStore.triggerLimit(this)
-        val triggers = if (limit > 0) {
-            getString(R.string.state_triggers_limit, count, limit)
-        } else {
-            getString(R.string.state_triggers, count)
+        var line = base
+        val payments = DeviceStore.payments(this)
+        if (payments.isNotEmpty()) {
+            val idx = (DeviceStore.paymentIndex(this) + 1).coerceAtMost(payments.size)
+            line += "\n" + getString(R.string.state_payment, idx, payments.size) +
+                " • " + getString(R.string.state_triggers, DeviceStore.triggerCount(this))
         }
-        var line = "$base\n$triggers"
         val err = SenderStatus.lastError
         if (err != null) line += "\n" + getString(R.string.state_error, err)
         return line

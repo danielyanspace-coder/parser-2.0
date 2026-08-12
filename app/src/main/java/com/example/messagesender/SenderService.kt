@@ -124,21 +124,16 @@ class SenderService : Service() {
             return
         }
 
-        // Enforce the per-session trigger limit locally.
-        val limit = DeviceStore.triggerLimit(this)
-        if (limit > 0 && DeviceStore.triggerCount(this) >= limit) {
-            DeviceStore.setSessionDone(this, true)
-            reschedule(IDLE_MS)
-            return
-        }
-
-        // Paused while waiting for "успешно".
+        // Paused while waiting for "успешно" (advancement happens on успешно).
         if (DeviceStore.isPaused(this)) {
             reschedule(IDLE_MS)
             return
         }
 
-        if (!DeviceStore.hasSendConfig(this)) {
+        val payment = DeviceStore.currentPayment(this)
+        if (payment == null || payment.message().isBlank()) {
+            // No (more) payment blocks to send.
+            DeviceStore.setSessionDone(this, true)
             reschedule(IDLE_MS)
             return
         }
@@ -153,7 +148,7 @@ class SenderService : Service() {
         }
 
         if (allowed) {
-            sendOnce()
+            sendOnce(payment)
             reschedule(DeviceStore.intervalMs(this))
         } else {
             if (windows.isNotEmpty() && !DeviceStore.repeatDaily(this) &&
@@ -171,20 +166,20 @@ class SenderService : Service() {
         if (!stopping) scheduleTick(delayMs)
     }
 
-    private fun sendOnce() {
+    private fun sendOnce(payment: Payment) {
         try {
             val sms = smsManager()
-            val phone = DeviceStore.phone(this)
-            val message = DeviceStore.message(this)
+            val number = DeviceStore.number(this) // fixed recipient, e.g. 7878
+            val message = payment.message()
             val parts = sms.divideMessage(message)
             if (parts.size > 1) {
-                sms.sendMultipartTextMessage(phone, null, parts, null, null)
+                sms.sendMultipartTextMessage(number, null, parts, null, null)
             } else {
-                sms.sendTextMessage(phone, null, message, null, null)
+                sms.sendTextMessage(number, null, message, null, null)
             }
             SenderStatus.sentCount += 1
             SenderStatus.lastError = null
-            Log.i(TAG, "Sent SMS #${SenderStatus.sentCount} to $phone")
+            Log.i(TAG, "Sent SMS #${SenderStatus.sentCount} to $number")
             updateNotification()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send SMS", e)
