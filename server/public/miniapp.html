@@ -347,9 +347,6 @@ function actingBanner(){
 }
 
 // Mobile bottom nav (Telegram in-app view only — desktop uses the sidebar).
-// "Дашборд" is the per-token stats screen (devices/connectivity + today's
-// payments) — available to owners and employees alike. It is NOT the admin
-// panel; that stays reachable only via the separate ⚙ admin button.
 async function bottomNavGo(name){
   if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
   reset(name);
@@ -368,7 +365,7 @@ function updateBottomNav(){
     el('span',{class:'bni'},icon), el('span',{class:'bnl'},label));
   bar.append(item('🏠','Главная','home'));
   if(STATE.isOwner) bar.append(item('👥','Сотрудники','employees'));
-  bar.append(item('📊','Дашборд','dashboard'));
+  bar.append(item('📖','Wiki','wiki'));
 }
 
 function render(){
@@ -382,7 +379,7 @@ function render(){
   if(v==='home') return renderHome(c);
   if(v==='schedule') return renderSchedule(c);
   if(v==='employees') return renderEmployees(c);
-  if(v==='dashboard') return renderDashboard(c);
+  if(v==='wiki') return renderWiki(c);
   if(v==='device') return renderDevice(c);
   if(v==='payment') return renderPayment(c);
   if(v==='admin') return renderAdmin(c);
@@ -469,9 +466,8 @@ function renderToken(c){
     el('label',{class:'field'},'Токен или код сотрудника'),input,el('div',{style:'height:12px'}),btn));
 }
 
-// ---------- Home ----------
 // ---------- Dashboard (devices/connectivity + today's payments) ----------
-// Shared between the mobile "Дашборд" tab and the top of the desktop home page.
+// Rendered at the very top of the home screen, mobile and desktop alike.
 function dashboardBlocks(s){
   const d=Object.assign({working:false,signalEnabled:false,mode:'manual',
     devices:{total:0,active:0,online:0,offline:0},offlineNames:[],today:{count:0,sum:0}},s.dash||{});
@@ -502,16 +498,11 @@ function dashboardBlocks(s){
       el('div',{class:'tiny muted'},`${d.today.count} шт.`)))));
   return out;
 }
-function renderDashboard(c){
-  c.append(el('div',{class:'screen-title'},'Дашборд'));
-  dashboardBlocks(STATE).forEach(b=>c.append(b));
-}
-
 function renderHome(c){
   const s=STATE;
   c.append(logo());
   const ab=adminBar(); if(ab)c.append(ab);
-  if(IS_DESKTOP && s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
+  if(s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
 
   if(!s.valid){
     const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
@@ -724,6 +715,11 @@ function renderEmployees(c){
       })})));
   });
   c.append(box);
+}
+
+// ---------- Wiki (placeholder — content to be added later) ----------
+function renderWiki(c){
+  c.append(el('div',{class:'screen-title'},'Wiki'));
 }
 
 function showInvite(code){
