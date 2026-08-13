@@ -1,9 +1,15 @@
 package com.checkout.alfasignal
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.widget.Button
@@ -35,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendBtn: Button
     private lateinit var logView: TextView
     private lateinit var permBtn: Button
+    private lateinit var battBtn: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -156,6 +163,16 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(permBtn)
 
+        battBtn = Button(this).apply {
+            setOnClickListener { requestIgnoreBattery() }
+        }
+        root.addView(battBtn)
+        root.addView(TextView(this).apply {
+            text = "Чтобы отправка и приём работали в фоне, отключи экономию батареи для приложения и разреши автозапуск в настройках телефона."
+            textSize = 12f
+            setPadding(0, dp(6), 0, 0)
+        })
+
         // ---------- Log ----------
         val logRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -192,8 +209,39 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshPerm()
+        refreshBattBtn()
         refreshSendBtn()
         refreshLog()
+    }
+
+    @SuppressLint("BatteryLife")
+    private fun requestIgnoreBattery() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) { toast("Экономия уже отключена"); return }
+        try {
+            startActivity(Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName")
+            ))
+        } catch (e: Exception) {
+            try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+            catch (e2: Exception) { toast("Открой настройки батареи вручную") }
+        }
+    }
+
+    private fun isBatteryFree(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun refreshBattBtn() {
+        if (isBatteryFree()) {
+            battBtn.text = "Экономия батареи: отключена ✅"
+            battBtn.isEnabled = false
+        } else {
+            battBtn.text = "⚠ Отключить экономию батареи"
+            battBtn.isEnabled = true
+        }
     }
 
     // --- Signal ---
@@ -243,6 +291,8 @@ class MainActivity : AppCompatActivity() {
         SmsSender.start(this)
         toast("Отправка запущена: каждые ${Prefs.intervalSec(this)} c")
         refreshSendBtn()
+        // Background reliability hinges on this — prompt if not yet whitelisted.
+        if (!isBatteryFree()) requestIgnoreBattery()
     }
 
     private fun refreshSendBtn() {
