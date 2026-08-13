@@ -118,6 +118,33 @@
   .actbanner{background:linear-gradient(135deg,#f7971e,#e8622c);color:#fff;border:none}
   .actbanner .actexit{width:auto;background:#fff;color:#c0510f;box-shadow:none;font-weight:700}
 
+  /* ---- Wiki accordion ---- */
+  .wikisec{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:14px;margin-bottom:12px;box-shadow:var(--shadow);overflow:hidden}
+  .wikihead{display:flex;align-items:center;gap:12px;padding:14px;cursor:pointer;user-select:none;transition:background .15s}
+  .wikihead:active{background:var(--card2)}
+  .wikiic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+    font-size:19px;flex:0 0 auto}
+  .wikititle{font-weight:700;font-size:14.5px;line-height:1.3}
+  .wikisub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .wikichev{margin-left:auto;flex:0 0 auto;color:var(--muted);font-size:13px;transition:transform .25s ease}
+  .wikisec.open .wikichev{transform:rotate(180deg)}
+  .wikibody{max-height:0;overflow:hidden;transition:max-height .35s ease}
+  .wikibodyin{padding:0 16px 16px;opacity:0;transition:opacity .3s ease}
+  .wikisec.open .wikibodyin{opacity:1;transition:opacity .3s ease .08s}
+  .wikip{font-size:13.5px;line-height:1.6;color:var(--ink);margin-top:8px}
+  .wikilist{list-style:none;margin:10px 0 0;padding:0}
+  .wikilist li{position:relative;padding-left:18px;margin-top:8px;font-size:13.5px;line-height:1.55;color:var(--ink)}
+  .wikilist li:before{content:'';position:absolute;left:2px;top:8px;width:6px;height:6px;border-radius:50%;background:var(--wdot,var(--accent))}
+  .wikistep{display:flex;gap:12px;margin-top:16px}
+  .wikistep:first-child{margin-top:8px}
+  .wikistepnum{flex:0 0 auto;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:800;color:#fff}
+  .wikisteptitle{font-weight:700;font-size:13.5px;color:var(--ink)}
+  .wikistepdesc{font-size:13px;color:var(--muted);margin-top:3px;line-height:1.55}
+  .wikiexample{background:var(--card2);border:1px dashed var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;
+    font-size:12.5px;line-height:1.55;color:var(--ink)}
+
   /* ---- Dashboard stat tiles ---- */
   .dtiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
   .dtile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center;box-shadow:var(--shadow)}
@@ -717,9 +744,104 @@ function renderEmployees(c){
   c.append(box);
 }
 
-// ---------- Wiki (placeholder — content to be added later) ----------
+// ---------- Wiki ----------
+function wikiP(text){ return el('div',{class:'wikip'},text); }
+function wikiList(items,color){
+  const ul=el('ul',{class:'wikilist',style:`--wdot:${color}`});
+  items.forEach(t=>ul.append(el('li',{},t)));
+  return ul;
+}
+function wikiStep(num,title,desc,color,extraNode){
+  const textWrap=el('div',{class:'grow'},
+    el('div',{class:'wikisteptitle'},title),
+    el('div',{class:'wikistepdesc'},desc));
+  if(extraNode) textWrap.append(extraNode);
+  return el('div',{class:'wikistep'},
+    el('div',{class:'wikistepnum',style:`background:${color}`},String(num)),
+    textWrap);
+}
+function wikiSection(sec,defaultOpen){
+  const bodyIn=el('div',{class:'wikibodyin'});
+  sec.body(sec.color).forEach(n=>bodyIn.append(n));
+  const body=el('div',{class:'wikibody'},bodyIn);
+  const chev=el('span',{class:'wikichev'},'⌄');
+  const head=el('div',{class:'wikihead'},
+    el('div',{class:'wikiic',style:`background:${sec.color}22;color:${sec.color}`},sec.icon),
+    el('div',{class:'grow'},el('div',{class:'wikititle'},sec.title),el('div',{class:'wikisub'},sec.sub)),
+    chev);
+  const wrap=el('div',{class:'wikisec',style:`border-left-color:${sec.color}`},head,body);
+  function setOpen(open){
+    wrap.classList.toggle('open',open);
+    body.style.maxHeight=open?(bodyIn.scrollHeight+'px'):'0px';
+  }
+  head.onclick=()=>setOpen(!wrap.classList.contains('open'));
+  if(defaultOpen) requestAnimationFrame(()=>setOpen(true));
+  return wrap;
+}
+const WIKI_SECTIONS=[
+  {icon:'▶️',color:'#2f7ae5',title:'«Начать немедленную работу со всех устройств»',
+   sub:'Главный тумблер запуска.',
+   body:(c)=>[
+     wikiP('Как только вы переводите ползунок в активное положение, в ту же секунду начинается отправка SMS со всех ваших устройств со статусом «Активно» (зелёный ползунок на устройстве). Отправка идёт с тем интервалом, который задан в «Настройке интервалов».'),
+     wikiList([
+       'Устройства со статусом «Неактивно» (белый ползунок) в запуске не участвуют.',
+       'Задержки нет: сервер будит устройства в момент нажатия.',
+       'Чтобы остановить, просто выключите тумблер.',
+     ],c),
+   ]},
+  {icon:'📡',color:'#e8622c',title:'«Отработать по сигналу»',
+   sub:'Автоматический запуск по сигналу, без вашего участия.',
+   body:(c)=>[
+     wikiP('Наша система мониторинга сама ловит сигнал и определяет окно. Как только сигнал пришёл, все ваши устройства со статусом «Активно» начинают отработку. Когда окно закрывается, система сама останавливается и присылает отчёт в Telegram-бота отдельным сообщением.'),
+     wikiList([
+       'Достаточно один раз включить ползунок «Отработать по сигналу», дальше всё происходит автоматически.',
+       'В работу идут только активные устройства с настроенными реквизитами.',
+       'Это дополнительный «страховочный» режим, его удобно держать включённым вместе с расписанием.',
+     ],c),
+   ]},
+  {icon:'⏱',color:'#6a5cff',title:'«Настройка интервалов»',
+   sub:'Общие правила работы, применяются сразу ко всем вашим устройствам.',
+   body:(c)=>[
+     wikiStep(1,'Интервал отправки.','Пауза между попытками отправить SMS. Например, интервал 15 секунд означает, что устройство пробует отправлять раз в 15 секунд.',c),
+     wikiStep(2,'Промежутки отправки (расписание).','Это окна времени суток, когда система работает. Их можно добавить сколько угодно. Если вы примерно знаете, когда открываются окна, вы заранее выставляете эти промежутки, и система сама отрабатывает платежи внутри них, а вне окон стоит на паузе. Время указывается по МСК, вплоть до секунд.',c),
+     wikiStep(3,'Добавить залп.','«Залп» это когда в точно заданное время устройство отправляет сразу несколько SMS подряд с очень коротким интервалом. Для каждого залпа вы задаёте:',c,
+       el('div',{},
+         wikiList(['время старта (часы : минуты : секунды),','сколько SMS отправить,','паузу между ними (в миллисекундах).'],c),
+         el('div',{class:'wikiexample'},el('b',{},'Например: 12:59:00 · 10 SMS · 500 мс.'),' Ровно в 12:59:00 уйдут 10 сообщений, по одному каждые полсекунды.'),
+         wikiP('Времён можно добавить сколько нужно, в каждое сработает свой залп. Отсчёт идёт по часам самого устройства, поэтому в нужную секунду вы попадаете точно. Это то, что нужно, когда важно выстрелить ровно в момент открытия окна.'))),
+     wikiStep(4,'Повторять каждый день.','Выставленный сценарий (промежутки и залпы) будет автоматически повторяться каждый день, без повторной настройки.',c),
+   ]},
+  {icon:'👥',color:'#28a745',title:'«Сотрудники»',
+   sub:'Совместная работа под одним токеном.',
+   body:(c)=>[
+     wikiP('Вы можете добавить сотрудника в свой личный кабинет, и ему откроются все функции работы по вашему токену: устройства, платежи, расписание, запуск, отчёты. Единственное ограничение: сотрудник не может добавлять других сотрудников, это доступно только вам как владельцу.'),
+     wikiList([
+       'Добавление по одноразовому коду-приглашению, который вы выдаёте.',
+       'Сотрудник входит один раз и дальше пользуется без повторного ввода.',
+       'Список сотрудников виден вам, любого можно убрать.',
+     ],c),
+   ]},
+  {icon:'🤖',color:'#17b3a3',title:'Отчёты в боте и кнопка «Доработать»',
+   sub:'Итог работы приходит вам в Telegram-бота.',
+   body:(c)=>[
+     wikiP('Когда работа завершается (все устройства отработали или вы выключили общий тумблер), бот присылает отчёт по каждому устройству:'),
+     wikiList([
+       'Отправлено: сколько сообщений ушло;',
+       'Задача: какая была сумма всех платежей;',
+       'Не отработано: что осталось невыполненным.',
+     ],c),
+     wikiP('Под отчётом есть кнопка «Доработать». Нажатие убирает уже выполненные платежи и оставляет только неотработанные, чтобы можно было быстро запустить повтор именно по тому, что не прошло, не собирая всё заново. После этого останется лишь задать запуск (расписание или общий тумблер).'),
+   ]},
+  {icon:'🔴',color:'#e5484d',title:'Определение «плохого» реквизита',
+   sub:'Система сама следит за качеством ваших реквизитов.',
+   body:(c)=>[
+     wikiP('Если реквизит, который вы указали, оказывается «плохим» (платёжный шлюз его отклоняет), вам сразу приходит уведомление в Telegram-бота с просьбой заменить этот реквизит. В уведомлении указано, какой именно реквизит и на каком устройстве, чтобы вы быстро нашли его и поменяли. Так вы не тратите время на реквизит, который всё равно не сработает.'),
+   ]},
+];
 function renderWiki(c){
   c.append(el('div',{class:'screen-title'},'Wiki'));
+  c.append(el('div',{class:'small muted',style:'margin:-8px 2px 14px'},'Как пользоваться ALFA SMS — коротко о каждой функции.'));
+  WIKI_SECTIONS.forEach((sec,i)=>c.append(wikiSection(sec,i===0)));
 }
 
 function showInvite(code){
