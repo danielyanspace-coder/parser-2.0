@@ -118,9 +118,26 @@
   .actbanner{background:linear-gradient(135deg,#f7971e,#e8622c);color:#fff;border:none}
   .actbanner .actexit{width:auto;background:#fff;color:#c0510f;box-shadow:none;font-weight:700}
 
+  /* ============ Mobile bottom nav (Telegram mini-app) ============ */
+  .wrap.hasnav{padding-bottom:82px}
+  .bottomnav{display:none}
+  .bottomnav.show{
+    display:flex;justify-content:center;gap:4px;
+    position:fixed;left:0;right:0;bottom:0;z-index:30;
+    background:var(--card);border-top:1px solid var(--line);
+    box-shadow:0 -2px 10px rgba(20,27,45,.08);
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+  }
+  .bnitem{flex:1;max-width:140px;display:flex;flex-direction:column;align-items:center;gap:2px;
+    background:transparent;border:none;padding:6px 4px;border-radius:10px;cursor:pointer;
+    color:var(--muted);font-size:11px;font-weight:600}
+  .bnitem .bni{font-size:20px;line-height:1}
+  .bnitem.on{color:var(--accent)}
+
   /* ============ Desktop website shell (browser only, never in Telegram) ============ */
   .appbar,.sidebar{display:none}
   @media (min-width:821px){
+    .bottomnav{display:none!important}
     .wrap.desktop{max-width:1180px;padding:0 26px 44px}
     /* --- logged-in: top bar + left sidebar + wide content --- */
     .wrap.desktop.authed{display:grid;grid-template-columns:250px minmax(0,1fr);
@@ -173,6 +190,7 @@
     <div class="prod">Production by <b>Splinter&nbsp;&amp;&nbsp;Sergio</b></div>
     <div class="support" id="supportBtn">🛟 Тех&nbsp;поддержка</div>
   </div>
+  <nav class="bottomnav" id="bottomnav"></nav>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -203,6 +221,18 @@ function swWrap(input){const w=el('label',{class:'sw'});w.append(input,el('span'
 
 let toastTimer=null;
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),1900);}
+
+async function copyText(text){
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); }
+    else{
+      const ta=el('textarea',{value:text,style:'position:fixed;opacity:0;top:0;left:0'});
+      document.body.append(ta); ta.focus(); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    toast('Скопировано');
+  }catch(e){ toast('Не удалось скопировать'); }
+}
 
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
@@ -310,9 +340,33 @@ function actingBanner(){
       el('button',{class:'btn small actexit',textContent:'Выйти',onclick:exitCabinet})));
 }
 
+// Mobile bottom nav (Telegram in-app view only — desktop uses the sidebar).
+async function bottomNavGo(name){
+  if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
+  if(name==='admin'){ await loadAdmin(); reset('admin'); return; }
+  reset(name);
+}
+function updateBottomNav(){
+  const bar=document.getElementById('bottomnav');
+  const wrap=document.querySelector('.wrap');
+  if(!bar||!wrap) return;
+  bar.innerHTML='';
+  if(IS_DESKTOP){ wrap.classList.remove('hasnav'); return; }
+  const show = !!STATE || view.name==='admin';
+  wrap.classList.toggle('hasnav', show);
+  bar.classList.toggle('show', show);
+  if(!show) return;
+  const item=(icon,label,name)=>el('button',{class:'bnitem'+(view.name===name?' on':''),onclick:()=>bottomNavGo(name)},
+    el('span',{class:'bni'},icon), el('span',{class:'bnl'},label));
+  bar.append(item('🏠','Главная','home'));
+  if(STATE&&STATE.isOwner) bar.append(item('👥','Сотрудники','employees'));
+  if(IS_ADMIN) bar.append(item('📊','Дашборд','admin'));
+}
+
 function render(){
   const c=$('#content'); c.innerHTML='';
   updateShell();
+  updateBottomNav();
   const v=view.name;
   if(v==='weblogin') return renderWebLogin(c);
   if(ACT_AS && v!=='admin') c.append(actingBanner());
@@ -817,7 +871,9 @@ function adminTokenCard(t){
   const card=el('div',{class:'card'});
   const st=t.enabled?(t.expired?el('span',{class:'badge err'},'истёк'):el('span',{class:'badge on'},'включён')):el('span',{class:'badge off'},'выключен');
   card.append(el('div',{class:'row between'},
-    el('div',{class:'grow'},el('div',{},el('span',{class:'code',style:'font-size:14px'},t.value)),
+    el('div',{class:'grow'},el('div',{class:'row',style:'gap:8px;flex-wrap:wrap'},
+        el('span',{class:'code',style:'font-size:14px'},t.value),
+        el('button',{class:'btn sec small',textContent:'Копировать',onclick:()=>copyText(t.value)})),
       el('div',{class:'small muted',style:'margin-top:4px'},t.comment||'—')),st));
   card.append(el('div',{class:'kv',style:'margin-top:8px'},
     `Устройств: ${t.deviceCount}/${t.deviceLimit} · привязано ${t.pairedCount} · активно ${t.activeCount}`));
