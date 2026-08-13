@@ -711,7 +711,8 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', 'alfa_sess=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0');
 }
 
-function resolveTelegramId(req) {
+// The real identity of the caller (Telegram initData, web session, or dev).
+function baseTelegramId(req) {
   const verified = verifyTelegramInitData(req.headers['x-init-data'] || '');
   if (verified) return verified.telegramId;
   // Desktop browser session (token or Telegram login).
@@ -726,9 +727,23 @@ function resolveTelegramId(req) {
   }
   return null;
 }
+// The effective identity. The admin may "enter" any token's cabinet by sending
+// X-Act-As-Token: <tokenId>; we then resolve to that token's owner identity so
+// every mini-app endpoint edits that token as if the admin were its owner.
+function resolveTelegramId(req) {
+  const base = baseTelegramId(req);
+  const act = req.headers['x-act-as-token'];
+  if (act && String(base) === ADMIN_TG_ID) {
+    const t = db.tokens.find((x) => x.id === String(act));
+    if (t) return 'tok:' + t.id;
+  }
+  return base;
+}
+// Admin gate must use the REAL identity, never the impersonated one.
+function isAdminId(req) { return String(baseTelegramId(req)) === ADMIN_TG_ID; }
 function isAdminReq(req) {
-  const id = resolveTelegramId(req);
-  return id != null && String(id) === ADMIN_TG_ID;
+  // Use the real identity so an impersonation header can't affect admin gating.
+  return isAdminId(req);
 }
 
 // ---------------------------------------------------------------------------
@@ -918,10 +933,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/mini/state' && m === 'GET') {
       const tgId = resolveTelegramId(req);
       if (!tgId) return sendJson(res, 401, { error: 'no_telegram_identity' });
-      const admin = String(tgId) === ADMIN_TG_ID;
+      const admin = isAdminId(req); // real identity — stays true while impersonating
+      const acting = admin && !!req.headers['x-act-as-token'];
       const t = findTokenByTelegram(tgId);
-      if (!t) return sendJson(res, 200, { needToken: true, isAdmin: admin });
-      return sendJson(res, 200, { needToken: false, isAdmin: admin, state: tokenStateView(t, resolveTelegramId(req)) });
+      if (!t) return sendJson(res, 200, { needToken: true, isAdmin: admin, acting });
+      return sendJson(res, 200, { needToken: false, isAdmin: admin, acting,
+        actingComment: acting ? (t.comment || t.value) : undefined,
+        state: tokenStateView(t, tgId) });
     }
 
     if (p === '/api/mini/bind' && m === 'POST') {
