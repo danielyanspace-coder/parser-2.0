@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AlfaSignal" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="colorPrimary">#E8622C</item>
+        <item name="colorPrimaryDark">#C24E1E</item>
+        <item name="colorAccent">#E8622C</item>
+    </style>
+</resources>

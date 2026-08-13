@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MessageSender"
 include(":app")
+include(":signal")
