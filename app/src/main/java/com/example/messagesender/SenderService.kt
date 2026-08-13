@@ -38,6 +38,7 @@ class SenderService : Service() {
     private var syncThread: Thread? = null
     @Volatile private var stopping = false
     @Volatile private var resyncNow = false
+    private var unauthorizedCount = 0
 
     private var sendExec: ScheduledExecutorService? = null
     private var pendingTick: ScheduledFuture<*>? = null
@@ -56,7 +57,7 @@ class SenderService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        startForegroundSafe()
 
         if (!DeviceStore.isPaired(this)) {
             stopSelf()
@@ -92,17 +93,27 @@ class SenderService : Service() {
                 resyncNow = false
                 when (ControlClient.sync(this, waitForChange = wait)) {
                     ControlClient.SyncResult.APPLIED -> {
+                        unauthorizedCount = 0
                         updateNotification()
                         if (DeviceStore.run(this)) scheduleTick(0)
                         // Re-arm burst timers if the schedule's starts changed.
                         if (DeviceStore.startsHash(this) != lastStartsHash) scheduleNextBurst()
                     }
                     ControlClient.SyncResult.UNAUTHORIZED -> {
-                        Log.i(TAG, "Unauthorized; clearing pairing")
-                        DeviceStore.clearPairing(this)
-                        shutdown()
-                        stopSelf()
-                        return@Thread
+                        // A single 403 can be transient (deploy blip, proxy, brief
+                        // DB reload). Only unpair after several in a row, so the
+                        // device never silently loses its pairing in the background.
+                        unauthorizedCount++
+                        Log.i(TAG, "Unauthorized ($unauthorizedCount/$MAX_UNAUTHORIZED)")
+                        if (unauthorizedCount >= MAX_UNAUTHORIZED) {
+                            Log.i(TAG, "Confirmed unauthorized; clearing pairing")
+                            DeviceStore.clearPairing(this)
+                            shutdown()
+                            stopSelf()
+                            return@Thread
+                        }
+                        updateNotification()
+                        sleep(ERROR_BACKOFF_MS)
                     }
                     ControlClient.SyncResult.ERROR -> {
                         updateNotification()
@@ -334,6 +345,24 @@ class SenderService : Service() {
         return getString(R.string.state_working, SenderStatus.sentCount)
     }
 
+    /** Promote to foreground, passing the data-sync type explicitly on Android 10+. */
+    private fun startForegroundSafe() {
+        val n = buildNotification()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID, n,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, n)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed", e)
+            startForeground(NOTIFICATION_ID, n)
+        }
+    }
+
     private fun buildNotification(): Notification {
         createChannel()
         val openPendingIntent = PendingIntent.getActivity(
@@ -400,7 +429,9 @@ class SenderService : Service() {
         /** Back-off between failed sync attempts. */
         private const val ERROR_BACKOFF_MS = 3_000L
         /** If no server response for this long, the long-poll is stale → reconnect. */
-        private const val STALE_MS = 50_000L
+        private const val STALE_MS = 35_000L
+        /** Consecutive 403s before we treat the pairing as truly revoked. */
+        private const val MAX_UNAUTHORIZED = 4
 
         /** Signal mode: number of probe sends of the first payment, and spacing. */
         private const val SIGNAL_BURST_COUNT = 3

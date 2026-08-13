@@ -70,8 +70,9 @@ object ControlClient {
             .put("status", status)
             .toString()
 
-        // Read timeout must exceed the server heartbeat (25s) when long-polling.
-        val readTimeout = if (waitForChange) 40000 else 15000
+        // Read timeout must exceed the server heartbeat (25s) when long-polling,
+        // but stay tight enough that a dead socket is detected quickly.
+        val readTimeout = if (waitForChange) 32000 else 12000
         return try {
             val resp = post(server.trimEnd('/') + "/api/device/sync", body, readTimeout)
             SenderStatus.lastSyncAt = System.currentTimeMillis()

@@ -43,6 +43,11 @@
     <string name="battery_message">Чтобы устройство отправляло SMS даже при выключенном экране, исключите приложение из экономии батареи. Открыть настройки?</string>
     <string name="battery_allow">Разрешить</string>
     <string name="cancel">Позже</string>
+    <string name="background_button">Работа в фоне</string>
+    <string name="background_title">Чтобы работало в фоне</string>
+    <string name="background_message">Телефон закрывает приложение в фоне ради экономии батареи — тогда связь теряется. Сделайте два шага:\n\n1) Отключите экономию батареи для приложения (кнопка ниже).\n2) В настройках телефона включите «Автозапуск» и снимите ограничения фоновой работы для «ALFA SMS» (у Xiaomi/Samsung/Huawei/Oppo называется по‑разному).\n\nИ закрепите приложение в списке недавних (замок), чтобы его не смахивало.</string>
+    <string name="background_open_battery">Экономия батареи</string>
+    <string name="background_open_settings">Настройки приложения</string>
 
     <string name="unpair">Отвязать устройство</string>
     <string name="unpair_confirm">Отвязать это устройство? Настройки останутся в мини‑аппе, но связь придётся привязать заново.</string>

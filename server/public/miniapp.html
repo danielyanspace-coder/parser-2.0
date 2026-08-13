@@ -206,6 +206,9 @@ function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show'
 
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
+// Build stamp — lets you confirm a deploy actually loaded (bump on each release).
+const BUILD='2.2';
+try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
 // When the admin "enters" a token's cabinet, every request carries this so the

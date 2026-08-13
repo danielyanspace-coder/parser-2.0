@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.buttonScan.setOnClickListener { launchScanner() }
         binding.buttonUnpair.setOnClickListener { confirmUnpair() }
+        binding.buttonBackground.setOnClickListener { showBackgroundHelp() }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -77,11 +78,21 @@ class MainActivity : AppCompatActivity() {
         UpdateManager.checkForUpdate(this)
     }
 
+    private var batteryPromptedThisLaunch = false
+
     override fun onResume() {
         super.onResume()
         // Opening the app forces an immediate reconnect so a stale "Нет связи"
         // clears right away instead of waiting for the watchdog.
-        if (DeviceStore.isPaired(this)) SenderService.syncNow(this)
+        if (DeviceStore.isPaired(this)) {
+            SenderService.syncNow(this)
+            // Existing users never saw the battery prompt (it only ran on pairing).
+            // Nudge once per launch until they whitelist the app.
+            if (!batteryPromptedThisLaunch) {
+                batteryPromptedThisLaunch = true
+                maybeRequestBatteryExemption()
+            }
+        }
         ui.removeCallbacks(statusPoller)
         ui.post(statusPoller)
     }
@@ -182,6 +193,49 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /** Explains the two steps needed for reliable background work and opens settings. */
+    private fun showBackgroundHelp() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.background_title)
+            .setMessage(R.string.background_message)
+            .setPositiveButton(R.string.background_open_battery) { _, _ -> openBatterySettings() }
+            .setNeutralButton(R.string.background_open_settings) { _, _ -> openAppDetails() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun openBatterySettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) { openAppDetails(); return }
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm != null && pm.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, R.string.battery_title, Toast.LENGTH_SHORT).show()
+            openAppDetails()
+            return
+        }
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (e: Exception) {
+            openAppDetails()
+        }
+    }
+
+    /** App details page — from here the user reaches autostart / background limits. */
+    private fun openAppDetails() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName")
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) { /* nothing more we can do */ }
     }
 
     // --- Status UI ---
