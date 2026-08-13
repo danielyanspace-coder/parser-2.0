@@ -11,6 +11,9 @@ data class Payment(val requisites: String, val amount: String, val count: Int) {
         listOf(requisites.trim(), amount.trim()).filter { it.isNotBlank() }.joinToString(" ")
 }
 
+/** A scheduled burst: at [atSec] (time of day) fire [count] SMS spaced [intervalMs] apart. */
+data class Start(val atSec: Int, val count: Int, val intervalMs: Int)
+
 /**
  * Single source of truth on the device (SharedPreferences). Holds:
  *  1. Identity — server URL, device id, secret (from pairing).
@@ -52,6 +55,7 @@ object DeviceStore {
     private const val K_REPEAT = "cfg_repeat"
     private const val K_START_AT = "cfg_start_at"
     private const val K_PAYMENTS = "cfg_payments"
+    private const val K_STARTS = "cfg_starts"
     private const val K_STOP_WORD = "cfg_stop_word"
     private const val K_RESUME_WORD = "cfg_resume_word"
     private const val K_REPLY = "cfg_reply"
@@ -130,6 +134,20 @@ object DeviceStore {
     }
 
     fun hasWork(c: Context): Boolean = payments(c).any { it.message().isNotBlank() }
+
+    fun starts(c: Context): List<Start> {
+        val raw = p(c).getString(K_STARTS, "").orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                Start(o.optInt("atSec"), o.optInt("count", 1).coerceAtLeast(1), o.optInt("intervalMs", 0).coerceAtLeast(0))
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+    /** A stable signature of the starts list, to detect config changes cheaply. */
+    fun startsHash(c: Context): String = p(c).getString(K_STARTS, "").orEmpty()
 
     // --- Runtime session state ---
     fun paymentIndex(c: Context) = p(c).getInt(K_PAYMENT_INDEX, 0)
@@ -213,6 +231,19 @@ object DeviceStore {
                 }
             }
             e.putString(K_PAYMENTS, payArr.toString())
+            val startArr = org.json.JSONArray()
+            cfg.optJSONArray("starts")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    startArr.put(
+                        JSONObject()
+                            .put("atSec", o.optInt("atSec"))
+                            .put("count", o.optInt("count", 1).coerceAtLeast(1))
+                            .put("intervalMs", o.optInt("intervalMs", 0).coerceAtLeast(0))
+                    )
+                }
+            }
+            e.putString(K_STARTS, startArr.toString())
             e.putString(K_STOP_WORD, cfg.optString("stopWord", "символ"))
             e.putString(K_RESUME_WORD, cfg.optString("resumeWord", "успешно"))
             e.putString(K_REPLY, cfg.optString("replyText", "Ок"))

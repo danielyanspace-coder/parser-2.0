@@ -200,7 +200,7 @@ function tokenDevices(tokenId) { return db.devices.filter((d) => d.tokenId === t
 
 // Global (per-token) schedule that applies to every device under the token.
 function defaultSchedule() {
-  return { intervalSec: 15, windows: [], repeatDaily: false, startAtMillis: 0 };
+  return { intervalSec: 15, windows: [], repeatDaily: false, startAtMillis: 0, starts: [] };
 }
 function sanitizeSchedule(input) {
   const s = defaultSchedule();
@@ -217,6 +217,15 @@ function sanitizeSchedule(input) {
   s.repeatDaily = Boolean(input.repeatDaily);
   const start = parseInt(input.startAtMillis, 10);
   s.startAtMillis = Number.isFinite(start) && start > 0 ? start : 0;
+  // Scheduled bursts ("залпы"): at each time-of-day, fire `count` SMS spaced
+  // `intervalMs` apart. Recurs daily. The device fires them by its own clock.
+  s.starts = Array.isArray(input.starts)
+    ? input.starts.map((b) => ({
+        atSec: Math.max(0, Math.min(86399, parseInt(b.atSec, 10) || 0)),
+        count: Math.max(1, Math.min(1000, parseInt(b.count, 10) || 1)),
+        intervalMs: Math.max(0, Math.min(600000, parseInt(b.intervalMs, 10) || 0)),
+      })).slice(0, 50)
+    : [];
   return s;
 }
 
@@ -352,6 +361,7 @@ function buildSyncPayload(d, t) {
       intervalSec: sched.intervalSec,
       windows: sched.windows,
       repeatDaily: sched.repeatDaily,
+      starts: sched.starts || [],
       startAtMillis: sched.startAtMillis,
       payments,
       stopWord: 'символ',

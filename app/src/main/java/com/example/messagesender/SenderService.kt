@@ -43,6 +43,11 @@ class SenderService : Service() {
     private var pendingTick: ScheduledFuture<*>? = null
     private val tickLock = Any()
 
+    // Scheduled bursts ("залпы") run on their own timer for exact-time firing.
+    private var burstExec: ScheduledExecutorService? = null
+    private var burstFuture: ScheduledFuture<*>? = null
+    @Volatile private var lastStartsHash = ""
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -65,6 +70,7 @@ class SenderService : Service() {
             sendExec = Executors.newSingleThreadScheduledExecutor()
             scheduleTick(0)
         }
+        scheduleNextBurst()
         when (intent?.action) {
             ACTION_KICK -> scheduleTick(0)
             ACTION_SYNC_NOW -> forceResync()
@@ -88,6 +94,8 @@ class SenderService : Service() {
                     ControlClient.SyncResult.APPLIED -> {
                         updateNotification()
                         if (DeviceStore.run(this)) scheduleTick(0)
+                        // Re-arm burst timers if the schedule's starts changed.
+                        if (DeviceStore.startsHash(this) != lastStartsHash) scheduleNextBurst()
                     }
                     ControlClient.SyncResult.UNAUTHORIZED -> {
                         Log.i(TAG, "Unauthorized; clearing pairing")
@@ -219,6 +227,56 @@ class SenderService : Service() {
         Thread { ControlClient.sync(this, waitForChange = false) }.apply { isDaemon = true }.start()
     }
 
+    // --- Scheduled bursts ("залпы по времени") ---
+
+    /**
+     * Arms a one-shot timer for the *next* scheduled burst. Bursts fire on the
+     * device's own clock so a start of 12:59:00 goes off exactly then, without a
+     * server poll in the loop. After a burst runs, this re-arms for the next one.
+     */
+    private fun scheduleNextBurst() {
+        val exec = burstExec ?: Executors.newSingleThreadScheduledExecutor().also { burstExec = it }
+        lastStartsHash = DeviceStore.startsHash(this)
+        burstFuture?.cancel(false)
+        if (stopping || exec.isShutdown) return
+        val starts = DeviceStore.starts(this)
+        if (starts.isEmpty()) return
+
+        val nowMs = System.currentTimeMillis()
+        val startOfDay = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        var bestDelay = Long.MAX_VALUE
+        var bestStart: Start? = null
+        for (s in starts) {
+            var target = startOfDay + s.atSec * 1000L
+            if (target <= nowMs + 500L) target += 86_400_000L // already passed today → tomorrow
+            val d = target - nowMs
+            if (d < bestDelay) { bestDelay = d; bestStart = s }
+        }
+        val chosen = bestStart ?: return
+        burstFuture = exec.schedule({
+            runCatching { runBurst(chosen) }.onFailure { Log.e(TAG, "burst error", it) }
+            scheduleNextBurst()
+        }, bestDelay, TimeUnit.MILLISECONDS)
+    }
+
+    /** Fires one burst: `count` sends of the payments in order, `intervalMs` apart. */
+    private fun runBurst(start: Start) {
+        if (!DeviceStore.isPaired(this) || !DeviceStore.active(this) || !DeviceStore.tokenValid(this)) return
+        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
+        if (payments.isEmpty()) return
+        for (i in 0 until start.count) {
+            if (stopping) break
+            sendOnce(payments[i % payments.size])
+            if (i < start.count - 1 && start.intervalMs > 0) sleep(start.intervalMs.toLong())
+        }
+    }
+
     private fun sendOnce(payment: Payment) {
         try {
             val sms = smsManager()
@@ -317,6 +375,10 @@ class SenderService : Service() {
             sendExec?.shutdownNow()
             sendExec = null
         }
+        burstFuture?.cancel(false)
+        burstFuture = null
+        burstExec?.shutdownNow()
+        burstExec = null
         releaseWakeLock()
     }
 

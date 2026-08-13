@@ -335,7 +335,7 @@ function renderHome(c){
 
 // ---------- Schedule (global, applies to all devices) ----------
 function renderSchedule(c){
-  const sch=Object.assign({intervalSec:15,windows:[],repeatDaily:false,startAtMillis:0},STATE.schedule||{});
+  const sch=Object.assign({intervalSec:15,windows:[],repeatDaily:false,startAtMillis:0,starts:[]},STATE.schedule||{});
   c.append(el('div',{class:'screen-title'},'Настройка интервалов'));
   c.append(el('div',{class:'small muted',style:'margin:-8px 2px 4px'},'Эти настройки применяются ко всем вашим устройствам.'));
   c.append(el('div',{class:'small',style:'margin:0 2px 12px;color:var(--accent);font-weight:600'},'🕒 Время указывается по Москве (МСК, UTC+3).'));
@@ -361,13 +361,34 @@ function renderSchedule(c){
   }
   (sch.windows||[]).forEach(addWinRow);
 
+  // ---- Scheduled bursts ("залпы") ----
+  const startsList=el('div',{});
+  function addStartRow(b){
+    const t=timeTriple(b?b.atSec:13*3600);
+    const cnt=el('input',{type:'number',inputmode:'numeric',min:'1',value:b?b.count:10,class:'tnum',style:'width:64px'});
+    const ims=el('input',{type:'number',inputmode:'numeric',min:'0',value:b?b.intervalMs:500,class:'tnum',style:'width:80px'});
+    const del=el('button',{class:'btn ghost small',textContent:'✕ удалить',style:'color:var(--danger);margin-top:6px'});
+    const row=el('div',{class:'winblock'},
+      el('div',{class:'row',style:'gap:6px'},el('span',{class:'tlbl'},'Время'),t),
+      el('div',{class:'tunit',style:'width:auto;margin-top:2px'},'часы : минуты : секунды'),
+      el('div',{class:'row',style:'gap:8px;margin-top:8px;flex-wrap:wrap'},
+        el('span',{class:'tlbl',style:'width:auto'},'СМС:'),cnt,
+        el('span',{class:'tlbl',style:'width:auto'},'интервал, мс:'),ims),
+      del);
+    del.onclick=()=>row.remove();
+    row._getBurst=()=>({atSec:t._get(),count:Math.max(1,parseInt(cnt.value,10)||1),intervalMs:Math.max(0,parseInt(ims.value,10)||0)});
+    startsList.append(row);
+  }
+  (sch.starts||[]).forEach(addStartRow);
+
   const repeat=el('input',{type:'checkbox',checked:!!sch.repeatDaily});
 
   const save=el('button',{class:'btn',textContent:'Сохранить',style:'margin-top:18px'});
   save.onclick=async()=>{
     const windows=[...winList.querySelectorAll('.winblock')].map(r=>r._get());
-    // No date — windows are pure time-of-day and recur by the clock.
-    const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,repeatDaily:repeat.checked,startAtMillis:0};
+    const starts=[...startsList.querySelectorAll('.winblock')].map(r=>r._getBurst());
+    // No date — windows/starts are pure time-of-day and recur by the clock.
+    const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,starts,repeatDaily:repeat.checked,startAtMillis:0};
     save.disabled=true;save.textContent='Сохранение…';
     const {code,data}=await api('POST','/api/mini/schedule',{schedule});
     save.disabled=false;save.textContent='Сохранить';
@@ -380,6 +401,10 @@ function renderSchedule(c){
     el('div',{class:'tiny muted'},'Время суток (по МСК), когда идёт отправка — например 16:00:00–16:01:00. Дата не важна: как только на часах наступает промежуток, система отрабатывает. Вне промежутков — пауза. Можно добавить несколько.'),
     winList,
     el('button',{class:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)}),
+    el('label',{class:'field'},'Залпы по времени'),
+    el('div',{class:'tiny muted'},'В указанное время (по МСК) устройство выпускает залп: заданное число СМС подряд с интервалом в мс. Пример: 12:59:00 · 10 СМС · 500 мс — ровно в 12:59:00 уйдут 10 СМС раз в полсекунды. Можно добавить несколько времён.'),
+    startsList,
+    el('button',{class:'btn sec small',textContent:'＋ Добавить залп',style:'margin-top:8px',onclick:()=>addStartRow(null)}),
     el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день'),swWrap(repeat)),
     save));
 }
