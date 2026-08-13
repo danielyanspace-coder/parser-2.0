@@ -118,6 +118,12 @@
   .actbanner{background:linear-gradient(135deg,#f7971e,#e8622c);color:#fff;border:none}
   .actbanner .actexit{width:auto;background:#fff;color:#c0510f;box-shadow:none;font-weight:700}
 
+  /* ---- Dashboard stat tiles ---- */
+  .dtiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .dtile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center;box-shadow:var(--shadow)}
+  .dtval{font-size:24px;font-weight:800}
+  .dtlbl{font-size:12px;color:var(--muted);margin-top:2px}
+
   /* ============ Mobile bottom nav (Telegram mini-app) ============ */
   .wrap.hasnav{padding-bottom:82px}
   .bottomnav{display:none}
@@ -341,9 +347,11 @@ function actingBanner(){
 }
 
 // Mobile bottom nav (Telegram in-app view only — desktop uses the sidebar).
+// "Дашборд" is the per-token stats screen (devices/connectivity + today's
+// payments) — available to owners and employees alike. It is NOT the admin
+// panel; that stays reachable only via the separate ⚙ admin button.
 async function bottomNavGo(name){
   if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
-  if(name==='admin'){ await loadAdmin(); reset('admin'); return; }
   reset(name);
 }
 function updateBottomNav(){
@@ -352,15 +360,15 @@ function updateBottomNav(){
   if(!bar||!wrap) return;
   bar.innerHTML='';
   if(IS_DESKTOP){ wrap.classList.remove('hasnav'); return; }
-  const show = !!STATE || view.name==='admin';
+  const show = !!STATE;
   wrap.classList.toggle('hasnav', show);
   bar.classList.toggle('show', show);
   if(!show) return;
   const item=(icon,label,name)=>el('button',{class:'bnitem'+(view.name===name?' on':''),onclick:()=>bottomNavGo(name)},
     el('span',{class:'bni'},icon), el('span',{class:'bnl'},label));
   bar.append(item('🏠','Главная','home'));
-  if(STATE&&STATE.isOwner) bar.append(item('👥','Сотрудники','employees'));
-  if(IS_ADMIN) bar.append(item('📊','Дашборд','admin'));
+  if(STATE.isOwner) bar.append(item('👥','Сотрудники','employees'));
+  bar.append(item('📊','Дашборд','dashboard'));
 }
 
 function render(){
@@ -374,6 +382,7 @@ function render(){
   if(v==='home') return renderHome(c);
   if(v==='schedule') return renderSchedule(c);
   if(v==='employees') return renderEmployees(c);
+  if(v==='dashboard') return renderDashboard(c);
   if(v==='device') return renderDevice(c);
   if(v==='payment') return renderPayment(c);
   if(v==='admin') return renderAdmin(c);
@@ -461,10 +470,48 @@ function renderToken(c){
 }
 
 // ---------- Home ----------
+// ---------- Dashboard (devices/connectivity + today's payments) ----------
+// Shared between the mobile "Дашборд" tab and the top of the desktop home page.
+function dashboardBlocks(s){
+  const d=Object.assign({working:false,signalEnabled:false,mode:'manual',
+    devices:{total:0,active:0,online:0,offline:0},offlineNames:[],today:{count:0,sum:0}},s.dash||{});
+  const modeLbl={manual:'вручную',schedule:'по расписанию',signal:'по сигналу'}[d.mode]||'вручную';
+  const out=[];
+  out.push(el('div',{class:'card',style:'margin-bottom:12px'},el('div',{class:'row between'},
+    el('div',{},el('b',{},d.working?'🟢 В работе':'⚪ Остановлено'),
+      d.working?el('div',{class:'small muted',style:'margin-top:2px'},'Режим: '+modeLbl):null),
+    d.signalEnabled?el('span',{class:'badge run'},'📡 сигнал вкл'):null)));
+
+  const tile=(label,val)=>el('div',{class:'dtile'},el('div',{class:'dtval'},String(val)),el('div',{class:'dtlbl'},label));
+  out.push(el('div',{class:'dtiles'},
+    tile('Всего устройств',d.devices.total),
+    tile('Активных',d.devices.active),
+    tile('На связи',d.devices.online),
+    tile('Не на связи',d.devices.offline)));
+
+  if(d.devices.offline>0){
+    out.push(el('div',{class:'card',style:'border-color:var(--danger);background:var(--danger-bg);margin-top:12px'},
+      el('b',{style:'color:var(--danger)'},'⚠ Нет связи с устройствами'),
+      el('div',{class:'small',style:'margin-top:4px'},(d.offlineNames||[]).join(', '))));
+  }
+
+  out.push(el('div',{class:'card',style:'margin-top:12px'},el('div',{class:'row between'},
+    el('div',{},el('b',{},'💸 Платежи сегодня'),el('div',{class:'small muted'},'по которым пришло «успешно»')),
+    el('div',{style:'text-align:right'},
+      el('div',{style:'font-size:19px;font-weight:800;color:var(--green-dark)'},money(d.today.sum)),
+      el('div',{class:'tiny muted'},`${d.today.count} шт.`)))));
+  return out;
+}
+function renderDashboard(c){
+  c.append(el('div',{class:'screen-title'},'Дашборд'));
+  dashboardBlocks(STATE).forEach(b=>c.append(b));
+}
+
 function renderHome(c){
   const s=STATE;
   c.append(logo());
   const ab=adminBar(); if(ab)c.append(ab);
+  if(IS_DESKTOP && s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
 
   if(!s.valid){
     const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
