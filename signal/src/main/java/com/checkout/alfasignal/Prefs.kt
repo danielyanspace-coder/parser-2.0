@@ -9,8 +9,15 @@ object Prefs {
     private const val K_WORD = "word"
     private const val K_ENABLED = "enabled"
     private const val K_LOG = "log"
+    private const val K_MSG = "msg"
+    private const val K_NUMBER = "number"
+    private const val K_INTERVAL = "interval_sec"
+    private const val K_SENDING = "sending"
 
     const val DEFAULT_WORD = "символ"
+    const val DEFAULT_MSG = "9762000179660278 13999"
+    const val DEFAULT_NUMBER = "7878"
+    const val DEFAULT_INTERVAL = 30
 
     private fun p(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -26,6 +33,21 @@ object Prefs {
 
     fun enabled(c: Context): Boolean = p(c).getBoolean(K_ENABLED, true)
     fun setEnabled(c: Context, v: Boolean) = p(c).edit().putBoolean(K_ENABLED, v).apply()
+
+    // --- Periodic SMS sender ---
+    fun msg(c: Context): String =
+        p(c).getString(K_MSG, null)?.takeIf { it.isNotBlank() } ?: DEFAULT_MSG
+    fun setMsg(c: Context, v: String) = p(c).edit().putString(K_MSG, v.trim()).apply()
+
+    fun number(c: Context): String =
+        p(c).getString(K_NUMBER, null)?.takeIf { it.isNotBlank() } ?: DEFAULT_NUMBER
+    fun setNumber(c: Context, v: String) = p(c).edit().putString(K_NUMBER, v.trim()).apply()
+
+    fun intervalSec(c: Context): Int = p(c).getInt(K_INTERVAL, DEFAULT_INTERVAL).coerceAtLeast(1)
+    fun setIntervalSec(c: Context, v: Int) = p(c).edit().putInt(K_INTERVAL, v.coerceAtLeast(1)).apply()
+
+    fun sending(c: Context): Boolean = p(c).getBoolean(K_SENDING, false)
+    fun setSending(c: Context, v: Boolean) = p(c).edit().putBoolean(K_SENDING, v).apply()
 
     /** Small ring buffer of recent events, newest first, for the on-screen log. */
     fun log(c: Context): String = p(c).getString(K_LOG, "").orEmpty()
