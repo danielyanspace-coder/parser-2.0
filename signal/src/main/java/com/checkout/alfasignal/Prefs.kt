@@ -49,12 +49,15 @@ object Prefs {
     fun sending(c: Context): Boolean = p(c).getBoolean(K_SENDING, false)
     fun setSending(c: Context, v: Boolean) = p(c).edit().putBoolean(K_SENDING, v).apply()
 
+    /** How many recent events the on-screen log keeps. */
+    private const val LOG_KEEP = 5
+
     /** Small ring buffer of recent events, newest first, for the on-screen log. */
     fun log(c: Context): String = p(c).getString(K_LOG, "").orEmpty()
 
     fun addLog(c: Context, line: String) {
         val prev = log(c)
-        val lines = (listOf(line) + prev.split('\n')).filter { it.isNotBlank() }.take(30)
+        val lines = (listOf(line) + prev.split('\n')).filter { it.isNotBlank() }.take(LOG_KEEP)
         p(c).edit().putString(K_LOG, lines.joinToString("\n")).apply()
     }
 
