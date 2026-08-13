@@ -115,11 +115,54 @@
     border-radius:22px;padding:8px 16px;font-size:13px;font-weight:600;color:var(--accent);cursor:pointer;box-shadow:var(--shadow)}
   .adminbar{display:flex;justify-content:flex-end;margin-bottom:4px}
   .adminbtn{font-size:12px;font-weight:600;color:#a44bff;background:#f4f0ff;border:1px solid #e6ddff;border-radius:20px;padding:6px 12px;cursor:pointer}
+
+  /* ============ Desktop website shell (browser only, never in Telegram) ============ */
+  .appbar,.sidebar{display:none}
+  @media (min-width:821px){
+    .wrap.desktop{max-width:1180px;padding:0 26px 44px}
+    /* --- logged-in: top bar + left sidebar + wide content --- */
+    .wrap.desktop.authed{display:grid;grid-template-columns:250px minmax(0,1fr);
+      grid-template-rows:auto 1fr auto;grid-template-areas:"bar bar" "side main" "side foot";column-gap:32px}
+    .wrap.desktop.authed .appbar{grid-area:bar;display:flex;align-items:center;justify-content:space-between;
+      padding:18px 2px 15px;border-bottom:1px solid var(--line);margin-bottom:22px;position:sticky;top:0;background:var(--bg);z-index:15}
+    .wrap.desktop.authed .sidebar{grid-area:side;display:block;position:sticky;top:84px;align-self:start}
+    .wrap.desktop.authed #content{grid-area:main;max-width:900px}
+    .wrap.desktop.authed .foot{grid-area:foot;max-width:900px;margin-top:30px}
+    .wrap.desktop.authed .themetgl{display:none}
+    .wrap.desktop.authed #content .logo{display:none}
+    .wrap.desktop.authed #content .adminbar{display:none}
+    .wrap.desktop.authed #content .home-logout{display:none}
+    .wrap.desktop.authed .screen-title{font-size:26px}
+    /* Cards a touch roomier on desktop */
+    .wrap.desktop.authed .card{padding:20px 22px}
+    /* --- not logged in: centered login --- */
+    .wrap.desktop:not(.authed) #content{max-width:470px;margin:26px auto 0}
+    .wrap.desktop:not(.authed) .foot{max-width:470px;margin-left:auto;margin-right:auto}
+
+    .dbrand{display:flex;flex-direction:column;line-height:1;cursor:pointer}
+    .dbrand .da{font-size:23px;font-weight:800;letter-spacing:.10em;
+      background:linear-gradient(90deg,#2f7ae5,#6a5cff);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .dbrand .dby{font-size:10px;font-weight:600;letter-spacing:.18em;color:var(--muted);margin-top:4px;text-transform:uppercase}
+    .dctrls{display:flex;align-items:center;gap:10px}
+    .dicon{width:40px;height:40px;border-radius:50%;background:var(--card);border:1px solid var(--line);
+      cursor:pointer;font-size:17px;box-shadow:var(--shadow)}
+    .dbtn{background:var(--btn-sec);color:var(--ink);border:1px solid var(--line);border-radius:10px;
+      padding:9px 16px;font-weight:600;font-size:14px;cursor:pointer}
+    .dnav{display:flex;flex-direction:column;gap:6px}
+    .dlink{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:transparent;
+      border:1px solid transparent;border-radius:11px;padding:12px 14px;font-size:15px;font-weight:600;color:var(--ink);cursor:pointer}
+    .dlink:hover{background:var(--card)}
+    .dlink.on{background:var(--card);border-color:var(--line);box-shadow:var(--shadow);color:var(--accent)}
+    .dlink .di{width:22px;text-align:center;font-size:16px}
+    .dsidefoot{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="themetgl" id="themeBtn" title="Тема">🌙</div>
+  <header class="appbar" id="appbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
   <div id="content"></div>
   <div class="foot">
     <div class="prod">Production by <b>Splinter&nbsp;&amp;&nbsp;Sergio</b></div>
@@ -134,6 +177,7 @@ const TG = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.i
 if (TG) { try { TG.ready(); TG.expand(); } catch(e){} }
 // Desktop = opened in a normal browser (no Telegram WebApp). Auth via web session.
 const IS_DESKTOP = !TG;
+if (IS_DESKTOP) { const w=document.querySelector('.wrap'); if(w) w.classList.add('desktop'); }
 
 const $ = (s,r=document)=>r.querySelector(s);
 
@@ -199,8 +243,41 @@ async function load(){
   STATE=data.state; reset('home');
 }
 
+// Desktop shell: top bar (brand + theme + logout) and left sidebar nav.
+async function deskNav(name){
+  if(name==='admin'){ await loadAdmin(); reset('admin'); return; }
+  if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
+  reset(name);
+}
+function updateShell(){
+  if(!IS_DESKTOP) return;
+  const wrap=document.querySelector('.wrap');
+  const appbar=document.getElementById('appbar');
+  const side=document.getElementById('sidebar');
+  const authed = !!STATE && view.name!=='weblogin';
+  wrap.classList.toggle('authed', authed);
+  if(!authed){ appbar.innerHTML=''; side.innerHTML=''; return; }
+  // top bar
+  appbar.innerHTML='';
+  const brand=el('div',{class:'dbrand',onclick:()=>reset('home')},el('span',{class:'da'},'ALFA'),el('span',{class:'dby'},'By CheckOut'));
+  const themeB=el('button',{class:'dicon',title:'Тема',textContent:(THEME==='dark'?'☀️':'🌙'),onclick:()=>document.getElementById('themeBtn').click()});
+  const outB=el('button',{class:'dbtn',textContent:'Выйти',onclick:async()=>{await api('POST','/api/web/logout');STATE=null;reset('weblogin');}});
+  appbar.append(brand, el('div',{class:'dctrls'}, themeB, outB));
+  // sidebar
+  side.innerHTML='';
+  const link=(icon,label,name)=>el('button',{class:'dlink'+(view.name===name?' on':''),onclick:()=>deskNav(name)},
+    el('span',{class:'di'},icon), el('span',{},label));
+  const nav=el('nav',{class:'dnav'});
+  nav.append(link('🏠','Главная','home'), link('⏱','Настройка интервалов','schedule'));
+  if(STATE.isOwner) nav.append(link('👥','Сотрудники','employees'));
+  if(IS_ADMIN) nav.append(link('⚙','Админ-панель','admin'));
+  const supp=el('button',{class:'dlink',onclick:()=>window.open(SUPPORT_URL,'_blank')},el('span',{class:'di'},'🛟'),el('span',{},'Тех поддержка'));
+  side.append(nav, el('div',{class:'dsidefoot'}, supp));
+}
+
 function render(){
   const c=$('#content'); c.innerHTML='';
+  updateShell();
   const v=view.name;
   if(v==='weblogin') return renderWebLogin(c);
   if(v==='token') return renderToken(c);
@@ -298,14 +375,6 @@ function renderHome(c){
   const s=STATE;
   c.append(logo());
   const ab=adminBar(); if(ab)c.append(ab);
-
-  // Desktop: a logout link (Telegram mini-app has no logout — identity is fixed).
-  if(IS_DESKTOP){
-    c.append(el('div',{class:'row',style:'justify-content:flex-end;margin-bottom:8px'},
-      el('button',{class:'btn ghost small',textContent:'Выйти',onclick:async()=>{
-        await api('POST','/api/web/logout'); STATE=null; reset('weblogin');
-      }})));
-  }
 
   if(!s.valid){
     const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
