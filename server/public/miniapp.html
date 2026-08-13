@@ -202,6 +202,7 @@ function render(){
   if(v==='token') return renderToken(c);
   if(v==='home') return renderHome(c);
   if(v==='schedule') return renderSchedule(c);
+  if(v==='employees') return renderEmployees(c);
   if(v==='device') return renderDevice(c);
   if(v==='payment') return renderPayment(c);
   if(v==='admin') return renderAdmin(c);
@@ -229,13 +230,13 @@ function renderToken(c){
     btn.disabled=true;btn.textContent='Проверка…';
     const {code,data}=await api('POST','/api/mini/bind',{token});
     btn.disabled=false;btn.textContent='Активировать';
-    if(code===200){STATE=data.state;IS_ADMIN=!!data.isAdmin;toast('Токен активирован');reset('home');return;}
-    const errs={invalid_token:'Токен не найден',disabled:'Токен отключён',expired:'Срок действия истёк',bound_elsewhere:'Токен привязан к другому аккаунту'};
+    if(code===200){STATE=data.state;IS_ADMIN=!!data.isAdmin;toast('Активировано');reset('home');return;}
+    const errs={invalid_token:'Токен или код не найден',disabled:'Токен отключён',expired:'Срок действия истёк',bound_elsewhere:'Токен уже занят владельцем. Попросите его добавить вас как сотрудника (он пришлёт вам код).'};
     toast(errs[data.error]||'Ошибка активации');
   };
   c.append(el('div',{class:'card'},
-    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа. Он привяжется к вашему Telegram — вводить повторно не нужно.'),
-    el('label',{class:'field'},'Токен доступа'),input,el('div',{style:'height:12px'}),btn));
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа (его выдаёт администратор) — или код сотрудника, если вас пригласил владелец. Привяжется к вашему Telegram — вводить повторно не нужно.'),
+    el('label',{class:'field'},'Токен или код сотрудника'),input,el('div',{style:'height:12px'}),btn));
 }
 
 // ---------- Home ----------
@@ -280,6 +281,16 @@ function renderHome(c){
   // interval settings + add device
   c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:()=>go('schedule')},
     el('span',{},'⏱ Настройка интервалов'),el('span',{class:'arw'},'›')));
+
+  // employees — owner only
+  if(s.isOwner){
+    c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:async()=>{
+      const {code,data}=await api('GET','/api/mini/state');
+      if(code===200&&!data.needToken){STATE=data.state;}
+      go('employees');
+    }},
+      el('span',{},'👥 Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:'')),el('span',{class:'arw'},'›')));
+  }
 
   const canAdd=s.canAddDevice;
   const addBtn=el('button',{class:'btn',textContent:'＋ Добавить устройство',disabled:!canAdd,style:'margin-bottom:12px'});
@@ -371,6 +382,69 @@ function renderSchedule(c){
     el('button',{class:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)}),
     el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день'),swWrap(repeat)),
     save));
+}
+
+// ---------- Employees (owner only) ----------
+function renderEmployees(c){
+  const s=STATE;
+  c.append(el('div',{class:'screen-title'},'Сотрудники'));
+  c.append(el('div',{class:'small muted',style:'margin:-8px 2px 12px'},
+    'Сотрудники получают полный доступ к вашим устройствам и настройкам, но не могут добавлять других сотрудников.'));
+
+  const add=el('button',{class:'btn',textContent:'＋ Добавить сотрудника'});
+  add.onclick=async()=>{
+    add.disabled=true;add.textContent='Создание…';
+    const {code,data}=await api('POST','/api/mini/employee/invite',{});
+    add.disabled=false;add.textContent='＋ Добавить сотрудника';
+    if(code===200){STATE=data.state;render();showInvite(data.invite.code);}else toast('Ошибка');
+  };
+  c.append(add);
+
+  // pending invites
+  const inv=s.invites||[];
+  if(inv.length){
+    const box=el('div',{class:'card',style:'margin-top:12px'});
+    box.append(el('b',{},'Коды‑приглашения (не использованы)'));
+    inv.forEach(i=>{
+      box.append(el('div',{class:'row between',style:'margin-top:10px'},
+        el('span',{class:'code',style:'font-size:16px'},i.code),
+        el('button',{class:'btn ghost small',textContent:'Отменить',style:'color:var(--danger)',onclick:async()=>{
+          const {code,data}=await api('DELETE','/api/mini/employee/invite/'+i.code);
+          if(code===200){STATE=data.state;render();toast('Код отменён');}else toast('Ошибка');
+        }})));
+    });
+    box.append(el('div',{class:'tiny muted',style:'margin-top:8px'},'Передайте код сотруднику — он вводит его вместо токена. Код одноразовый, действует 7 дней.'));
+    c.append(box);
+  }
+
+  // current employees
+  const emps=s.employees||[];
+  const box=el('div',{class:'card',style:'margin-top:12px'});
+  box.append(el('b',{},`Сотрудники (${emps.length})`));
+  if(emps.length===0) box.append(el('div',{class:'small muted',style:'margin-top:8px'},'Пока нет. Добавьте по кнопке выше.'));
+  emps.forEach(e=>{
+    box.append(el('div',{class:'row between',style:'margin-top:10px'},
+      el('div',{},el('div',{},'👤 '+(e.name||('ID '+e.telegramId))),el('div',{class:'tiny muted'},'Telegram ID: '+e.telegramId)),
+      el('button',{class:'btn danger small',textContent:'Убрать',onclick:()=>confirmAction('Убрать сотрудника?',async()=>{
+        const {code,data}=await api('DELETE','/api/mini/employee/'+encodeURIComponent(e.telegramId));
+        if(code===200){STATE=data.state;render();toast('Убран');}else toast('Ошибка');
+      })})));
+  });
+  c.append(box);
+}
+
+function showInvite(code){
+  let copied=false;
+  try{ if(navigator.clipboard){navigator.clipboard.writeText(code);copied=true;} }catch(e){}
+  const copyBtn=el('button',{class:'btn sec',textContent:copied?'Скопировано ✓':'Скопировать код'});
+  copyBtn.onclick=()=>{ try{navigator.clipboard&&navigator.clipboard.writeText(code);copyBtn.textContent='Скопировано ✓';}catch(e){} };
+  const node=el('div',{},
+    el('b',{},'Код сотрудника'),
+    el('div',{class:'center',style:'margin:12px 0'},el('span',{class:'code',style:'font-size:24px'},code)),
+    el('div',{class:'small muted'},'Передайте этот код сотруднику. Пусть введёт его вместо токена в этом мини‑аппе — и получит доступ. Код одноразовый, действует 7 дней.'),
+    el('div',{style:'height:12px'}), copyBtn,
+    el('button',{class:'btn ghost',textContent:'Готово',style:'margin-top:6px',onclick:()=>bd.remove()}));
+  const bd=modal(node);
 }
 
 // ---------- Device screen ----------

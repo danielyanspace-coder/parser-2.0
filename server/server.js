@@ -170,7 +170,32 @@ function tokenValid(t) {
   return true;
 }
 function findTokenByValue(v) { return db.tokens.find((t) => t.value === v); }
-function findTokenByTelegram(id) { return db.tokens.find((t) => t.telegramId && String(t.telegramId) === String(id)); }
+// A token is accessible to its owner (t.telegramId) and to its employees.
+function tokenMembers(t) {
+  const list = [];
+  if (t.telegramId) list.push(String(t.telegramId));
+  for (const e of (t.employees || [])) list.push(String(e.telegramId));
+  return list;
+}
+function findTokenByTelegram(id) {
+  const s = String(id);
+  return db.tokens.find((t) => tokenMembers(t).includes(s));
+}
+function isOwner(t, id) { return !!t && !!t.telegramId && String(t.telegramId) === String(id); }
+// Removes a Telegram identity from every token (owner or employee).
+function detachIdentity(id) {
+  const s = String(id);
+  for (const t of db.tokens) {
+    if (String(t.telegramId) === s) t.telegramId = null;
+    if (Array.isArray(t.employees)) t.employees = t.employees.filter((e) => String(e.telegramId) !== s);
+  }
+}
+function newInviteCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = ''; const b = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) s += alphabet[b[i] % alphabet.length];
+  return s;
+}
 function tokenDevices(tokenId) { return db.devices.filter((d) => d.tokenId === tokenId); }
 
 // Global (per-token) schedule that applies to every device under the token.
@@ -551,9 +576,10 @@ function deviceView(d) {
     payments: d.payments || [], status: d.status || {}, pairing: pendingPairing(d),
   };
 }
-function tokenStateView(t) {
+function tokenStateView(t, viewerId) {
   const devices = tokenDevices(t.id);
-  return {
+  const owner = isOwner(t, viewerId);
+  const view = {
     comment: t.comment || '',
     expiresAt: t.expiresAt || 0,
     expired: !!(t.expiresAt && now() >= t.expiresAt),
@@ -566,8 +592,15 @@ function tokenStateView(t) {
     signalEnabled: !!t.signalEnabled,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
+    isOwner: owner,
     devices: devices.map(deviceView),
   };
+  // Only the owner sees / manages the employee list.
+  if (owner) {
+    view.employees = (t.employees || []).map((e) => ({ telegramId: String(e.telegramId), name: e.name || '', addedAt: e.addedAt || 0 }));
+    view.invites = (t.employeeInvites || []).filter((i) => now() < i.expiresAt).map((i) => ({ code: i.code, expiresAt: i.expiresAt }));
+  }
+  return view;
 }
 
 // ---------------------------------------------------------------------------
@@ -767,7 +800,7 @@ const server = http.createServer(async (req, res) => {
       const admin = String(tgId) === ADMIN_TG_ID;
       const t = findTokenByTelegram(tgId);
       if (!t) return sendJson(res, 200, { needToken: true, isAdmin: admin });
-      return sendJson(res, 200, { needToken: false, isAdmin: admin, state: tokenStateView(t) });
+      return sendJson(res, 200, { needToken: false, isAdmin: admin, state: tokenStateView(t, resolveTelegramId(req)) });
     }
 
     if (p === '/api/mini/bind' && m === 'POST') {
@@ -776,15 +809,37 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       if (!body) return sendJson(res, 400, { error: 'bad_json' });
       const value = String(body.token || '').trim().toUpperCase();
+
+      // 1) Token value → become the OWNER (first) or reconnect an existing member.
       const t = findTokenByValue(value);
-      if (!t) return sendJson(res, 404, { error: 'invalid_token' });
-      if (!t.enabled) return sendJson(res, 403, { error: 'disabled' });
-      if (t.expiresAt && now() >= t.expiresAt) return sendJson(res, 403, { error: 'expired' });
-      if (t.telegramId && String(t.telegramId) !== String(tgId)) return sendJson(res, 409, { error: 'bound_elsewhere' });
-      for (const other of db.tokens) if (other !== t && String(other.telegramId) === String(tgId)) other.telegramId = null;
-      t.telegramId = String(tgId);
-      saveDb();
-      return sendJson(res, 200, { state: tokenStateView(t), isAdmin: String(tgId) === ADMIN_TG_ID });
+      if (t) {
+        if (!t.enabled) return sendJson(res, 403, { error: 'disabled' });
+        if (t.expiresAt && now() >= t.expiresAt) return sendJson(res, 403, { error: 'expired' });
+        if (t.telegramId && String(t.telegramId) !== String(tgId) &&
+            !(t.employees || []).some((e) => String(e.telegramId) === String(tgId))) {
+          // Someone else already owns this token; employees join via invite code.
+          return sendJson(res, 409, { error: 'bound_elsewhere' });
+        }
+        if (!t.telegramId) { detachIdentity(tgId); t.telegramId = String(tgId); } // first → owner
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, tgId), isAdmin: String(tgId) === ADMIN_TG_ID });
+      }
+
+      // 2) Employee invite code → join an existing token as an employee.
+      const host = db.tokens.find((x) => (x.employeeInvites || []).some((i) => i.code === value && now() < i.expiresAt));
+      if (host) {
+        if (!tokenValid(host)) return sendJson(res, 403, { error: 'disabled' });
+        detachIdentity(tgId);
+        host.employees = host.employees || [];
+        if (!host.employees.some((e) => String(e.telegramId) === String(tgId))) {
+          host.employees.push({ telegramId: String(tgId), name: '', addedAt: now() });
+        }
+        host.employeeInvites = (host.employeeInvites || []).filter((i) => i.code !== value); // consume
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(host, tgId), isAdmin: String(tgId) === ADMIN_TG_ID });
+      }
+
+      return sendJson(res, 404, { error: 'invalid_token' });
     }
 
     // ================= Admin API (Telegram-id gated) =================
@@ -824,7 +879,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -875,9 +930,36 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/api/mini/')) {
       const t = miniRequireToken(req, res);
       if (!t) return;
+      const viewer = resolveTelegramId(req);
+
+      // ---- Employees (owner only) ----
+      if (p.startsWith('/api/mini/employee')) {
+        if (!isOwner(t, viewer)) return sendJson(res, 403, { error: 'not_owner' });
+
+        if (p === '/api/mini/employee/invite' && m === 'POST') {
+          t.employeeInvites = (t.employeeInvites || []).filter((i) => now() < i.expiresAt);
+          const invite = { code: newInviteCode(), createdAt: now(), expiresAt: now() + 7 * 24 * 60 * 60 * 1000 };
+          t.employeeInvites.push(invite);
+          saveDb();
+          return sendJson(res, 200, { invite, state: tokenStateView(t, viewer) });
+        }
+        const mInv = p.match(/^\/api\/mini\/employee\/invite\/([A-Z0-9]+)$/);
+        if (mInv && m === 'DELETE') {
+          t.employeeInvites = (t.employeeInvites || []).filter((i) => i.code !== mInv[1]);
+          saveDb();
+          return sendJson(res, 200, { state: tokenStateView(t, viewer) });
+        }
+        const mEmp = p.match(/^\/api\/mini\/employee\/([^/]+)$/);
+        if (mEmp && m === 'DELETE') {
+          t.employees = (t.employees || []).filter((e) => String(e.telegramId) !== String(mEmp[1]));
+          saveDb();
+          return sendJson(res, 200, { state: tokenStateView(t, viewer) });
+        }
+        return sendJson(res, 404, { error: 'not_found' });
+      }
 
       if (p === '/api/mini/global' && m === 'POST') {
-        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
+        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t, resolveTelegramId(req)) });
         const body = await readJson(req);
         const on = Boolean(body && body.on);
         const was = !!t.globalOn;
@@ -886,32 +968,32 @@ const server = http.createServer(async (req, res) => {
         saveDb();
         // Turning work OFF ends the session → send the report of what got done.
         if (was && !on) maybeSendReport(t);
-        return sendJson(res, 200, { state: tokenStateView(t) });
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
 
       if (p === '/api/mini/signal' && m === 'POST') {
         const body = await readJson(req);
         t.signalEnabled = Boolean(body && body.on);
         saveDb();
-        return sendJson(res, 200, { state: tokenStateView(t) });
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
 
       if (p === '/api/mini/schedule' && m === 'POST') {
-        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
+        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t, resolveTelegramId(req)) });
         const body = await readJson(req);
         t.schedule = sanitizeSchedule(body && body.schedule);
         t.scheduleRuns = []; // a new schedule may run again
         bumpToken(t); // schedule applies to all devices — push to all
         saveDb();
-        return sendJson(res, 200, { state: tokenStateView(t) });
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
 
       if (p === '/api/mini/device' && m === 'POST') {
-        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t) });
+        if (!tokenValid(t)) return sendJson(res, 403, { error: 'token_invalid', state: tokenStateView(t, resolveTelegramId(req)) });
         const body = await readJson(req);
         const name = String((body && body.name) || '').trim().slice(0, 60) || 'Устройство';
         if (tokenDevices(t.id).length >= (t.deviceLimit || 0)) {
-          return sendJson(res, 409, { error: 'quota_exceeded', state: tokenStateView(t) });
+          return sendJson(res, 409, { error: 'quota_exceeded', state: tokenStateView(t, resolveTelegramId(req)) });
         }
         const d = {
           id: uuid(), tokenId: t.id, name, active: true, createdAt: now(),
@@ -921,7 +1003,7 @@ const server = http.createServer(async (req, res) => {
         };
         db.devices.push(d);
         saveDb();
-        return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
+        return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
       }
 
       const mdev = p.match(/^\/api\/mini\/device\/([^/]+)(?:\/(\w+))?$/);
@@ -933,7 +1015,7 @@ const server = http.createServer(async (req, res) => {
         if (m === 'DELETE' && !action) {
           db.devices = db.devices.filter((x) => x.id !== d.id);
           saveDb();
-          return sendJson(res, 200, { state: tokenStateView(t) });
+          return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
         }
         if (m === 'POST' && action === 'payments') {
           const body = await readJson(req);
@@ -943,27 +1025,27 @@ const server = http.createServer(async (req, res) => {
           d.payments = clean;
           bumpDevice(d);
           saveDb();
-          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
+          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
         if (m === 'POST' && action === 'active') {
           const body = await readJson(req);
           d.active = Boolean(body && body.active);
           bumpDevice(d);
           saveDb();
-          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
+          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
         if (m === 'POST' && action === 'name') {
           const body = await readJson(req);
           d.name = String((body && body.name) || '').trim().slice(0, 60) || d.name;
           saveDb();
-          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
+          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
         if (m === 'POST' && action === 'pair') {
           d.pairedAt = 0; d.secret = ''; d.hardwareId = '';
           d.pairing = { code: newPairingCode(), expiresAt: now() + PAIRING_TTL_MS };
           bumpDevice(d);
           saveDb();
-          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t) });
+          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
         return sendJson(res, 405, { error: 'method_not_allowed' });
       }
@@ -1082,7 +1164,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
