@@ -16,3 +16,7 @@ server/data/
 
 # OS
 .DS_Store
+
+# Published APKs for OTA (tracked so the server can get them via git pull)
+!releases/
+!releases/*.apk
