@@ -66,6 +66,13 @@ const WEBHOOK_SECRET = TELEGRAM_BOT_TOKEN
 const SIGNAL_SECRET = process.env.SIGNAL_SECRET
   || crypto.createHash('sha256').update('signal:' + ADMIN_PASSWORD).digest('hex').slice(0, 24);
 
+// Bot username (without @) for the desktop "Log in with Telegram" widget.
+const BOT_USERNAME = (process.env.BOT_USERNAME || 'alfa_sms_bot').replace(/^@/, '');
+// HMAC key for signing the desktop web-session cookie. Stable across restarts.
+const SESSION_SECRET = process.env.SESSION_SECRET
+  || crypto.createHash('sha256').update('session:' + (TELEGRAM_BOT_TOKEN || ADMIN_PASSWORD)).digest('hex');
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
   process.exit(1);
@@ -179,9 +186,18 @@ function tokenMembers(t) {
 }
 function findTokenByTelegram(id) {
   const s = String(id);
+  // Desktop token login carries the token directly as "tok:<tokenId>".
+  if (s.startsWith('tok:')) { const tid = s.slice(4); return db.tokens.find((t) => t.id === tid); }
   return db.tokens.find((t) => tokenMembers(t).includes(s));
 }
-function isOwner(t, id) { return !!t && !!t.telegramId && String(t.telegramId) === String(id); }
+// The owner is the first Telegram id bound to the token; a desktop token-login
+// session (holding the raw token) also gets owner-level access.
+function isOwner(t, id) {
+  if (!t) return false;
+  const s = String(id);
+  if (s === 'tok:' + t.id) return true;
+  return !!t.telegramId && String(t.telegramId) === s;
+}
 // Removes a Telegram identity from every token (owner or employee).
 function detachIdentity(id) {
   const s = String(id);
@@ -636,9 +652,74 @@ function verifyTelegramInitData(initData) {
     return { telegramId: String(user.id), user };
   } catch (e) { return null; }
 }
+// Verifies a Telegram Login Widget payload (different scheme than WebApp
+// initData: secret key is sha256(bot_token), fields joined as key=value\n).
+function verifyTelegramLogin(data) {
+  if (!data || !TELEGRAM_BOT_TOKEN || !data.hash || !data.id) return null;
+  try {
+    const hash = String(data.hash);
+    const pairs = [];
+    for (const k of Object.keys(data)) {
+      if (k === 'hash' || data[k] == null) continue;
+      pairs.push(`${k}=${data[k]}`);
+    }
+    pairs.sort();
+    const dataCheckString = pairs.join('\n');
+    const secretKey = crypto.createHash('sha256').update(TELEGRAM_BOT_TOKEN).digest();
+    const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    if (!safeEqual(computed, hash)) return null;
+    if (data.auth_date && (Date.now() / 1000 - Number(data.auth_date)) > 86400) return null;
+    return { id: String(data.id) };
+  } catch (e) { return null; }
+}
+
+// --- Desktop web session (signed cookie) ---
+function parseCookies(req) {
+  const out = {};
+  const h = req.headers.cookie || '';
+  for (const part of h.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function signSession(payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+function readSession(req) {
+  const raw = parseCookies(req)['alfa_sess'];
+  if (!raw) return null;
+  const i = raw.lastIndexOf('.');
+  if (i < 0) return null;
+  const body = raw.slice(0, i), sig = raw.slice(i + 1);
+  const expect = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  if (!safeEqual(sig, expect)) return null;
+  try {
+    const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (p.exp && Date.now() > p.exp) return null;
+    return p;
+  } catch (e) { return null; }
+}
+function setSessionCookie(res, payload) {
+  const val = encodeURIComponent(signSession(payload));
+  res.setHeader('Set-Cookie',
+    `alfa_sess=${val}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+}
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'alfa_sess=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0');
+}
+
 function resolveTelegramId(req) {
   const verified = verifyTelegramInitData(req.headers['x-init-data'] || '');
   if (verified) return verified.telegramId;
+  // Desktop browser session (token or Telegram login).
+  const sess = readSession(req);
+  if (sess) {
+    if (sess.k === 'tg' && sess.id) return String(sess.id);
+    if (sess.k === 'tok' && sess.tid) return 'tok:' + sess.tid;
+  }
   if (!TELEGRAM_BOT_TOKEN) {
     const dbg = req.headers['x-debug-tg-id'];
     return dbg ? String(dbg) : 'dev-user';
@@ -801,6 +882,36 @@ const server = http.createServer(async (req, res) => {
         'Content-Disposition': 'attachment; filename="alfa-sms.apk"',
       });
       return fs.createReadStream(APK_FILE).pipe(res);
+    }
+
+    // ================= Desktop web login (browser, no Telegram WebApp) =========
+    // Config for the "Log in with Telegram" widget.
+    if (p === '/api/web/config' && m === 'GET') {
+      return sendJson(res, 200, { botUsername: BOT_USERNAME, hasBot: !!TELEGRAM_BOT_TOKEN });
+    }
+    // Log in by token value → owner-level web session.
+    if (p === '/api/web/login/token' && m === 'POST') {
+      const body = await readJson(req);
+      const value = String((body && body.token) || '').trim().toUpperCase();
+      const t = findTokenByValue(value);
+      if (!t) return sendJson(res, 404, { error: 'invalid_token' });
+      if (!t.enabled) return sendJson(res, 403, { error: 'disabled' });
+      if (!tokenValid(t)) return sendJson(res, 403, { error: 'expired' });
+      setSessionCookie(res, { k: 'tok', tid: t.id, exp: Date.now() + SESSION_TTL_MS });
+      return sendJson(res, 200, { ok: true });
+    }
+    // Log in with Telegram (Login Widget payload) → Telegram-id web session.
+    if (p === '/api/web/login/telegram' && m === 'POST') {
+      const body = await readJson(req);
+      const data = body && body.user ? body.user : body;
+      const v = verifyTelegramLogin(data);
+      if (!v) return sendJson(res, 403, { error: 'bad_signature' });
+      setSessionCookie(res, { k: 'tg', id: v.id, exp: Date.now() + SESSION_TTL_MS });
+      return sendJson(res, 200, { ok: true });
+    }
+    if (p === '/api/web/logout' && m === 'POST') {
+      clearSessionCookie(res);
+      return sendJson(res, 200, { ok: true });
     }
 
     // ================= Mini-app: session/state =================

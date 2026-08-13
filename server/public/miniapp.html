@@ -130,8 +130,10 @@
 
 <script>
 "use strict";
-const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const TG = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData ? window.Telegram.WebApp : null;
 if (TG) { try { TG.ready(); TG.expand(); } catch(e){} }
+// Desktop = opened in a normal browser (no Telegram WebApp). Auth via web session.
+const IS_DESKTOP = !TG;
 
 const $ = (s,r=document)=>r.querySelector(s);
 
@@ -160,7 +162,7 @@ $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SU
 async function api(method,path,body){
   const headers={'Content-Type':'application/json'};
   if(TG&&TG.initData)headers['X-Init-Data']=TG.initData;
-  const res=await fetch(path,{method,headers,body:body!=null?JSON.stringify(body):undefined});
+  const res=await fetch(path,{method,headers,credentials:'same-origin',body:body!=null?JSON.stringify(body):undefined});
   let data=null;try{data=await res.json();}catch(e){}
   return {code:res.status,data:data||{}};
 }
@@ -190,15 +192,17 @@ function adminBar(){
 
 async function load(){
   const {code,data}=await api('GET','/api/mini/state');
+  if(code===401){ if(IS_DESKTOP){ STATE=null; reset('weblogin'); return; } renderError('Нет доступа'); return; }
   if(code!==200){renderError('Не удалось связаться с сервером');return;}
   IS_ADMIN=!!data.isAdmin;
-  if(data.needToken){ STATE=null; reset('token'); return; }
+  if(data.needToken){ STATE=null; reset(IS_DESKTOP?'weblogin':'token'); return; }
   STATE=data.state; reset('home');
 }
 
 function render(){
   const c=$('#content'); c.innerHTML='';
   const v=view.name;
+  if(v==='weblogin') return renderWebLogin(c);
   if(v==='token') return renderToken(c);
   if(v==='home') return renderHome(c);
   if(v==='schedule') return renderSchedule(c);
@@ -216,6 +220,56 @@ function renderError(msg){
     el('div',{class:'muted'},msg),
     el('div',{style:'height:12px'}),
     el('button',{class:'btn sec small',textContent:'Повторить',onclick:load})));
+}
+
+// ---------- Desktop web login (token or Telegram) ----------
+window.onTelegramAuth = async (user)=>{
+  const {code}=await api('POST','/api/web/login/telegram',{user});
+  if(code===200){ toast('Вход выполнен'); load(); }
+  else toast('Не удалось войти через Telegram');
+};
+async function renderWebLogin(c){
+  c.append(logo(),el('div',{class:'subttl'},'Личный кабинет — вход для компьютера'));
+  const ab=adminBar(); if(ab)c.append(ab);
+
+  // Method 1: by token
+  const input=el('input',{type:'text',placeholder:'XXXXX-XXXXX-XXXXX-XXXXX',autocapitalize:'characters'});
+  const btn=el('button',{class:'btn',textContent:'Войти по токену'});
+  btn.onclick=async()=>{
+    const token=input.value.trim().toUpperCase();
+    if(!token){toast('Введите токен');return;}
+    btn.disabled=true;btn.textContent='Проверка…';
+    const {code,data}=await api('POST','/api/web/login/token',{token});
+    btn.disabled=false;btn.textContent='Войти по токену';
+    if(code===200){toast('Готово');load();return;}
+    const errs={invalid_token:'Токен не найден',disabled:'Токен отключён',expired:'Срок действия истёк'};
+    toast(errs[data.error]||'Ошибка входа');
+  };
+  c.append(el('div',{class:'card'},
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа — откроется тот же личный кабинет, что и в Telegram (права владельца).'),
+    el('label',{class:'field'},'Токен доступа'),input,el('div',{style:'height:12px'}),btn));
+
+  // Method 2: Telegram Login Widget
+  const tgBox=el('div',{style:'display:flex;justify-content:center;min-height:48px'});
+  const card=el('div',{class:'card'},
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Или войдите через Telegram — привяжется к вашему аккаунту (владелец или сотрудник).'),
+    tgBox);
+  c.append(card);
+  try{
+    const cfg=await (await fetch('/api/web/config',{credentials:'same-origin'})).json();
+    if(cfg&&cfg.hasBot&&cfg.botUsername){
+      const s=document.createElement('script');
+      s.async=true; s.src='https://telegram.org/js/telegram-widget.js?22';
+      s.setAttribute('data-telegram-login',cfg.botUsername);
+      s.setAttribute('data-size','large');
+      s.setAttribute('data-userpic','false');
+      s.setAttribute('data-request-access','write');
+      s.setAttribute('data-onauth','onTelegramAuth(user)');
+      tgBox.append(s);
+    } else {
+      tgBox.append(el('div',{class:'tiny muted'},'Вход через Telegram недоступен (бот не настроен).'));
+    }
+  }catch(e){ tgBox.append(el('div',{class:'tiny muted'},'Не удалось загрузить вход Telegram.')); }
 }
 
 // ---------- Token entry ----------
@@ -245,11 +299,19 @@ function renderHome(c){
   c.append(logo());
   const ab=adminBar(); if(ab)c.append(ab);
 
+  // Desktop: a logout link (Telegram mini-app has no logout — identity is fixed).
+  if(IS_DESKTOP){
+    c.append(el('div',{class:'row',style:'justify-content:flex-end;margin-bottom:8px'},
+      el('button',{class:'btn ghost small',textContent:'Выйти',onclick:async()=>{
+        await api('POST','/api/web/logout'); STATE=null; reset('weblogin');
+      }})));
+  }
+
   if(!s.valid){
     const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
     c.append(el('div',{class:'card'},el('div',{class:'row between'},
       el('div',{},el('b',{},'Токен недоступен'),el('div',{class:'small muted'},reason)),
-      el('button',{class:'btn ghost small',textContent:'Сменить',onclick:()=>reset('token')}))));
+      el('button',{class:'btn ghost small',textContent:'Сменить',onclick:()=>reset(IS_DESKTOP?'weblogin':'token')}))));
   }
 
   // global work toggle
