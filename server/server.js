@@ -602,6 +602,38 @@ function deviceView(d) {
     payments: d.payments || [], status: d.status || {}, pairing: pendingPairing(d),
   };
 }
+// Concise dashboard summary: device connectivity + today's successful payments.
+function computeDashboard(t) {
+  const devs = tokenDevices(t.id);
+  const nowMs = now();
+  const ONLINE_MS = SYNC_INTERVAL_MS * 3; // ~45s: a live device syncs well within this
+  // Connectivity is only meaningful for active devices (inactive ones don't work).
+  let active = 0, online = 0;
+  const offlineNames = [];
+  for (const d of devs) {
+    if (!d.active) continue;
+    active++;
+    const on = !!(d.lastSeen && (nowMs - d.lastSeen) < ONLINE_MS);
+    if (on) online++; else offlineNames.push(d.name || '—');
+  }
+  // Start of today in the server's timezone (TZ env = users' timezone, MSK).
+  const sd = new Date(); sd.setHours(0, 0, 0, 0);
+  const startToday = sd.getTime();
+  let count = 0, sum = 0;
+  for (const p of (db.paymentsLog || [])) {
+    if (p.tokenId !== t.id || p.at < startToday) continue;
+    count++; sum += parseFloat(String(p.amount).replace(',', '.')) || 0;
+  }
+  return {
+    working: !!t.globalOn,
+    signalEnabled: !!t.signalEnabled,
+    mode: t.workMode || 'manual',
+    devices: { total: devs.length, active, online, offline: Math.max(0, active - online) },
+    offlineNames: offlineNames.slice(0, 8),
+    today: { count, sum },
+  };
+}
+
 function tokenStateView(t, viewerId) {
   const devices = tokenDevices(t.id);
   const owner = isOwner(t, viewerId);
@@ -620,6 +652,7 @@ function tokenStateView(t, viewerId) {
     recipientNumber: RECIPIENT_NUMBER,
     isOwner: owner,
     devices: devices.map(deviceView),
+    dash: computeDashboard(t),
   };
   // Only the owner sees / manages the employee list.
   if (owner) {
@@ -803,10 +836,18 @@ function renderAdmin() {
 // Routing helpers
 // ---------------------------------------------------------------------------
 
-function serveStatic(res, file, contentType) {
+function serveStatic(res, file, contentType, noCache) {
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'Content-Type': contentType });
+    const headers = { 'Content-Type': contentType };
+    // The mini-app HTML must never be cached, or Telegram keeps serving an old
+    // build after a deploy. Force a fresh fetch every open.
+    if (noCache) {
+      headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+      headers['Pragma'] = 'no-cache';
+      headers['Expires'] = '0';
+    }
+    res.writeHead(200, headers);
     res.end(buf);
   });
 }
@@ -1363,7 +1404,7 @@ const server = http.createServer(async (req, res) => {
 
     // ================= Static / root =================
     if ((p === '/' || p === '/app' || p === '/index.html') && m === 'GET') {
-      return serveStatic(res, path.join(PUBLIC_DIR, 'miniapp.html'), 'text/html; charset=utf-8');
+      return serveStatic(res, path.join(PUBLIC_DIR, 'miniapp.html'), 'text/html; charset=utf-8', true);
     }
     if (p === '/qrcode.js' && m === 'GET') {
       return serveStatic(res, path.join(PUBLIC_DIR, 'qrcode.js'), 'application/javascript; charset=utf-8');
