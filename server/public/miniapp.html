@@ -297,7 +297,7 @@ async function api(method,path,body){
 }
 
 // --- App state + router ---
-let STATE=null, IS_ADMIN=false, ADMIN_DATA=null, ADMIN_PAY=null;
+let STATE=null, IS_ADMIN=false, ADMIN_DATA=null, ADMIN_PAY=null, ADMIN_SIGNALS=null;
 let view={name:'home',params:{}};
 const stack=[];
 
@@ -990,6 +990,7 @@ function money(n){const s=(Math.round((+n||0)*100)/100).toString().replace('.','
 async function loadAdmin(){
   const a=await api('GET','/api/admin/tokens'); if(a.code===200)ADMIN_DATA=a.data; else {toast('Нет доступа');return;}
   const p=await api('GET','/api/admin/payments'); if(p.code===200)ADMIN_PAY=p.data;
+  const s=await api('GET','/api/admin/signals'); if(s.code===200)ADMIN_SIGNALS=s.data;
 }
 
 function renderAdmin(c){
@@ -1018,6 +1019,41 @@ function renderAdmin(c){
       const tgl=el('button',{class:'btn ghost small',textContent:'▾ Разбивка и последние',style:'margin-top:6px'});
       tgl.onclick=()=>{const open=bt.classList.toggle('hidden')===false;recent.classList.toggle('hidden',!open);tgl.textContent=(open?'▴':'▾')+' Разбивка и последние';};
       card.append(tgl,bt,recent);
+    }
+    c.append(card);
+  }
+
+  // Signal webhook (MacroDroid "символ") hit log
+  if(ADMIN_SIGNALS){
+    const card=el('div',{class:'card'});
+    card.append(el('div',{class:'row between'},
+      el('div',{},el('b',{},'📡 Логи сигналов'),el('div',{class:'small muted'},'каждый вызов вебхука «символ» (MacroDroid)')),
+      el('div',{style:'text-align:right'},el('div',{style:'font-size:19px;font-weight:800'},String(ADMIN_SIGNALS.total||0)),
+        el('div',{class:'tiny muted'},'всего'))));
+    const list=ADMIN_SIGNALS.recent||[];
+    if(list.length===0){
+      card.append(el('div',{class:'small muted',style:'margin-top:8px'},'Пока пусто — сигналов не было.'));
+    }else{
+      const box=el('div',{class:'hidden',style:'margin-top:8px;border-top:1px solid var(--line);padding-top:8px'});
+      const resultLabel={started:'запущен',already_running:'уже работал',schedule_active:'идёт расписание',invalid:'токен недействителен'};
+      const resultColor={started:'var(--green-dark)',invalid:'var(--danger)'};
+      list.slice(0,100).forEach(x=>{
+        const d=new Date(x.at).toLocaleString('ru-RU');
+        const row=el('div',{class:'tiny',style:'margin-top:8px;color:var(--muted)'});
+        row.append(`${d} · ${x.ip||'?'} · `,el('b',{style:'color:var(--ink)'},`старт ${x.started}`),`, пропуск ${x.skipped}`);
+        if((x.tokens||[]).length){
+          const detail=el('div',{style:'margin-top:2px;opacity:.9'});
+          x.tokens.forEach((tk,i)=>{
+            detail.append(el('span',{style:`color:${resultColor[tk.result]||'var(--muted)'}`},
+              `${tk.comment} (${resultLabel[tk.result]||tk.result})`), i<x.tokens.length-1?', ':'');
+          });
+          row.append(detail);
+        }
+        box.append(row);
+      });
+      const tgl=el('button',{class:'btn ghost small',textContent:'▾ Последние вызовы',style:'margin-top:6px'});
+      tgl.onclick=()=>{const open=box.classList.toggle('hidden')===false;tgl.textContent=(open?'▴':'▾')+' Последние вызовы';};
+      card.append(tgl,box);
     }
     c.append(card);
   }

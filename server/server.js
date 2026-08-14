@@ -88,19 +88,20 @@ function ensureDataDir() {
 
 function loadDb() {
   ensureDataDir();
-  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [] };
+  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [], signalLog: [] };
   try {
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     db.tokens = db.tokens || [];
     db.devices = db.devices || [];
     db.paymentsLog = db.paymentsLog || []; // log of successful ("успешно") payments
+    db.signalLog = db.signalLog || []; // log of "символ" webhook hits (MacroDroid)
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
     console.error('Failed to read db.json, starting empty:', e.message);
-    return { tokens: [], devices: [], paymentsLog: [] };
+    return { tokens: [], devices: [], paymentsLog: [], signalLog: [] };
   }
 }
 
@@ -125,6 +126,11 @@ function saveDbSoon() {
 
 function now() { return Date.now(); }
 function uuid() { return crypto.randomUUID(); }
+function clientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return String(fwd).split(',')[0].trim();
+  return (req.socket && req.socket.remoteAddress) || '';
+}
 
 function newTokenValue() {
   const hex = crypto.randomBytes(10).toString('hex').toUpperCase();
@@ -911,14 +917,23 @@ const server = http.createServer(async (req, res) => {
     // work for every user who opted in via the "Отработать по сигналу" switch.
     if (p === `/api/signal/${SIGNAL_SECRET}` && (m === 'POST' || m === 'GET')) {
       let started = 0, skipped = 0;
+      const tokens = [];
       for (const t of db.tokens) {
-        if (!t.signalEnabled || !tokenValid(t)) continue;
+        if (!t.signalEnabled) continue;
+        if (!tokenValid(t)) { tokens.push({ comment: t.comment || t.value, result: 'invalid' }); continue; }
         // Schedule wins: ignore the signal if a schedule window is active now,
         // or if a work session is already running.
-        if (t.globalOn || scheduleActiveNow(t)) { skipped++; continue; }
+        if (t.globalOn || scheduleActiveNow(t)) {
+          skipped++;
+          tokens.push({ comment: t.comment || t.value, result: t.globalOn ? 'already_running' : 'schedule_active' });
+          continue;
+        }
         startSession(t, 'signal');
         started++;
+        tokens.push({ comment: t.comment || t.value, result: 'started' });
       }
+      db.signalLog.push({ at: now(), ip: clientIp(req), started, skipped, tokens });
+      if (db.signalLog.length > 5000) db.signalLog = db.signalLog.slice(-3000);
       saveDb();
       return sendJson(res, 200, { ok: true, started, skipped });
     }
@@ -1050,6 +1065,13 @@ const server = http.createServer(async (req, res) => {
           at: x.at, tokenComment: x.tokenComment,
         }));
         return sendJson(res, 200, { total, byToken, recent });
+      }
+
+      // Log of "символ" signal webhook hits (MacroDroid), most recent first.
+      if (p === '/api/admin/signals' && m === 'GET') {
+        const log = db.signalLog || [];
+        const recent = log.slice(-200).reverse();
+        return sendJson(res, 200, { total: log.length, recent });
       }
       if (p === '/api/admin/token' && m === 'POST') {
         const body = await readJson(req);
