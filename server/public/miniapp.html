@@ -270,20 +270,30 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.2';
+const BUILD='2.3';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
 // When the admin "enters" a token's cabinet, every request carries this so the
 // server edits that token as its owner. Admin endpoints ignore it (real id used).
 let ACT_AS=null, ACT_LABEL='';
+// Track in-flight writes so the background auto-refresh never clobbers a change
+// the user just made with a stale snapshot (the "switches turn on by themselves"
+// bug). Any non-GET call counts as a write.
+let WRITES_IN_FLIGHT=0, LAST_WRITE_AT=0;
 async function api(method,path,body){
+  const isWrite = method!=='GET';
+  if(isWrite){ WRITES_IN_FLIGHT++; LAST_WRITE_AT=Date.now(); }
   const headers={'Content-Type':'application/json'};
   if(TG&&TG.initData)headers['X-Init-Data']=TG.initData;
   if(ACT_AS)headers['X-Act-As-Token']=ACT_AS;
-  const res=await fetch(path,{method,headers,credentials:'same-origin',body:body!=null?JSON.stringify(body):undefined});
-  let data=null;try{data=await res.json();}catch(e){}
-  return {code:res.status,data:data||{}};
+  try{
+    const res=await fetch(path,{method,headers,credentials:'same-origin',body:body!=null?JSON.stringify(body):undefined});
+    let data=null;try{data=await res.json();}catch(e){}
+    return {code:res.status,data:data||{}};
+  } finally {
+    if(isWrite){ WRITES_IN_FLIGHT--; LAST_WRITE_AT=Date.now(); }
+  }
 }
 
 // --- App state + router ---
@@ -1145,10 +1155,23 @@ function timeTriple(totalSec){
 }
 
 // ---------- Live refresh (home only, does not disturb editing) ----------
+let LAST_STATE_JSON='';
 setInterval(async()=>{
   if(view.name!=='home'||!STATE||!STATE.valid||document.querySelector('.backdrop'))return;
+  // Don't poll while the user is changing something, so a stale snapshot can't
+  // overwrite a just-made toggle ("switches turn on by themselves").
+  if(WRITES_IN_FLIGHT>0)return;
+  const started=Date.now();
   const {code,data}=await api('GET','/api/mini/state');
-  if(code===200&&!data.needToken){STATE=data.state;IS_ADMIN=!!data.isAdmin;render();}
+  if(code!==200||data.needToken)return;
+  // A change happened while this poll was in flight → its result is stale, drop it.
+  if(WRITES_IN_FLIGHT>0||LAST_WRITE_AT>=started)return;
+  IS_ADMIN=!!data.isAdmin;
+  const j=JSON.stringify(data.state);
+  if(j===LAST_STATE_JSON)return; // nothing changed → don't rebuild (no toggle flicker)
+  LAST_STATE_JSON=j;
+  STATE=data.state;
+  render();
 },8000);
 
 load();
