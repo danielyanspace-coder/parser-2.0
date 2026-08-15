@@ -173,22 +173,29 @@ class SenderService : Service() {
             return
         }
 
-        // Paused while waiting for "успешно" (advancement happens on успешно).
+        val signal = DeviceStore.isSignalMode(this)
+
+        // Paused after a "символ", waiting for "успешно" (all modes). This is not
+        // a stop: it resumes on "успешно" and advances to the next block. If no
+        // "символ" ever comes we never pause, so sending simply continues.
         if (DeviceStore.isPaused(this)) {
             reschedule(IDLE_MS)
             return
         }
 
-        val signal = DeviceStore.isSignalMode(this)
-
-        val payment = DeviceStore.currentPayment(this)
+        var payment = DeviceStore.currentPayment(this)
         if (payment == null || payment.message().isBlank()) {
-            // Nothing (more) to send. In signal mode this ends the session; in
-            // manual/schedule we just idle — the user (or a schedule window /
-            // the off toggle / "снять все с работы") decides when to stop.
-            if (signal) finishSession()
-            reschedule(IDLE_MS)
-            return
+            if (signal) {
+                // Signal mode ends when its probe is done.
+                finishSession()
+                reschedule(IDLE_MS)
+                return
+            }
+            // Manual / schedule never stop on their own: loop back to the first
+            // block so sending continues until the toggle is off / window ends.
+            DeviceStore.setPaymentIndex(this, 0)
+            payment = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
+            if (payment == null) { reschedule(IDLE_MS); return } // nothing configured
         }
 
         // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no

@@ -78,20 +78,16 @@ class MainActivity : AppCompatActivity() {
         UpdateManager.checkForUpdate(this)
     }
 
-    private var batteryPromptedThisLaunch = false
-
     override fun onResume() {
         super.onResume()
         // Opening the app forces an immediate reconnect so a stale "Нет связи"
         // clears right away instead of waiting for the watchdog.
         if (DeviceStore.isPaired(this)) {
             SenderService.syncNow(this)
-            // Existing users never saw the battery prompt (it only ran on pairing).
-            // Nudge once per launch until they whitelist the app.
-            if (!batteryPromptedThisLaunch) {
-                batteryPromptedThisLaunch = true
-                maybeRequestBatteryExemption()
-            }
+            // Background work requires the battery-optimization exemption. Keep
+            // asking on every open until the user grants it, so the app can be
+            // minimized without being killed.
+            maybeRequestBatteryExemption()
         }
         ui.removeCallbacks(statusPoller)
         ui.post(statusPoller)
@@ -192,6 +188,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(R.string.cancel, null)
+            .setCancelable(false) // must choose — background work depends on it
             .show()
     }
 

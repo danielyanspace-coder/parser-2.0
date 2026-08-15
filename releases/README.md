@@ -6,6 +6,7 @@
 
 | Файл | versionCode | versionName |
 |------|-------------|-------------|
+| `alfa-sms-v2.8.apk` | 9 | 2.8 |
 | `alfa-sms-v2.7.apk` | 8 | 2.7 |
 | `alfa-sms-v2.6.apk` | 7 | 2.6 |
 | `alfa-sms-v2.5.apk` | 6 | 2.5 |
@@ -17,10 +18,10 @@
 cd /path/to/parser-2.0 && git pull && sudo systemctl restart alfa-sms
 
 # Залить APK и объявить версию (подставь свой ADMIN_PASSWORD):
-curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.7.apk \
+curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.8.apk \
   https://project.alfa-vpn.ru/admin/apk
 curl -u admin:ВАШ_ADMIN_PASSWORD -X POST -H "Content-Type: application/json" \
-  -d '{"versionCode":8,"versionName":"2.7","notes":"Автопоиск сигнала (пул зондирования)"}' \
+  -d '{"versionCode":9,"versionName":"2.8","notes":"Новая система мониторинга сигналов с большей конверсией"}' \
   https://project.alfa-vpn.ru/admin/release
 ```
 После этого пользователям при открытии приложения предложит «Обновить».

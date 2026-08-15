@@ -71,13 +71,13 @@ class SmsReceiver : BroadcastReceiver() {
         if (fromSignal && body.contains(stopWord, ignoreCase = true)) {
             // Always answer "Ок" — even if the system is off.
             replyOk(context, sender)
-            if (working) {
-                countTrigger(context)
-            } else {
-                // Caught "символ" while idle (a probe found the open window) →
-                // tell the server so it fires the system-wide signal.
-                reportSignal(context)
-            }
+            // ANY "символ" on ANY device is a signal for the whole system,
+            // regardless of why this device was sending (pool / interval /
+            // immediate). The server dedupes via its per-token cooldown.
+            reportSignal(context)
+            // Normal flow: while working, "символ" pauses to wait for "успешно",
+            // then advances to the next block (same as before).
+            if (working) countTrigger(context)
             return
         }
         if (fromSignal && body.contains(resumeWord, ignoreCase = true)) {
@@ -121,8 +121,11 @@ class SmsReceiver : BroadcastReceiver() {
         DeviceStore.setPaused(context, false)
         val need = DeviceStore.currentPayment(context)?.count ?: 1
         if (DeviceStore.triggerCount(context) >= need) {
-            val hasNext = DeviceStore.advancePaymentOrFinish(context)
-            Log.i(TAG, if (hasNext) "Block done; next payment" else "All payments done")
+            // Manual / schedule loop forever (stop only on toggle-off / window
+            // end); signal mode finishes after its cycle.
+            val loop = !DeviceStore.isSignalMode(context)
+            val hasNext = DeviceStore.advancePaymentOrFinish(context, loop)
+            Log.i(TAG, if (hasNext) "Advanced to next block" else "All payments done")
         }
         SenderService.kick(context)
         pushStatus(context)
