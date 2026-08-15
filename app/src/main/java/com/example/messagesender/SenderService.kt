@@ -183,19 +183,13 @@ class SenderService : Service() {
             return
         }
 
-        var payment = DeviceStore.currentPayment(this)
+        val payment = DeviceStore.currentPayment(this)
         if (payment == null || payment.message().isBlank()) {
-            if (signal) {
-                // Signal mode ends when its probe is done.
-                finishSession()
-                reschedule(IDLE_MS)
-                return
-            }
-            // Manual / schedule never stop on their own: loop back to the first
-            // block so sending continues until the toggle is off / window ends.
-            DeviceStore.setPaymentIndex(this, 0)
-            payment = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
-            if (payment == null) { reschedule(IDLE_MS); return } // nothing configured
+            // No (more) blocks to send: all done → finish (server sends the
+            // report), or nothing configured → just idle.
+            finishSession()
+            reschedule(IDLE_MS)
+            return
         }
 
         // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no

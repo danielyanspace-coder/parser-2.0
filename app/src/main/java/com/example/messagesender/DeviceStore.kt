@@ -176,25 +176,13 @@ object DeviceStore {
      * Returns true if a next block exists (and became active), false if there
      * are no more blocks (the session is finished).
      */
-    /**
-     * Move to the next payment block. When past the last block: if [loop] (manual
-     * / schedule work), start the cycle over so sending never stops on its own;
-     * otherwise (signal mode) end the session.
-     */
-    fun advancePaymentOrFinish(c: Context, loop: Boolean = false): Boolean {
+    /** Move to the next block; when past the last one, finish the session (so the
+     *  server stops the token and sends the report). */
+    fun advancePaymentOrFinish(c: Context): Boolean {
         val next = paymentIndex(c) + 1
         return if (next < payments(c).size) {
             p(c).edit()
                 .putInt(K_PAYMENT_INDEX, next)
-                .putInt(K_TRIGGER_COUNT, 0)
-                .putBoolean(K_OVERRIDE, false)
-                .putBoolean(K_PAUSED, false)
-                .apply()
-            true
-        } else if (loop) {
-            // Completed all blocks — restart from the first one and keep working.
-            p(c).edit()
-                .putInt(K_PAYMENT_INDEX, 0)
                 .putInt(K_TRIGGER_COUNT, 0)
                 .putBoolean(K_OVERRIDE, false)
                 .putBoolean(K_PAUSED, false)

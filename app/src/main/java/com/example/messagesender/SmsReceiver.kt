@@ -121,10 +121,9 @@ class SmsReceiver : BroadcastReceiver() {
         DeviceStore.setPaused(context, false)
         val need = DeviceStore.currentPayment(context)?.count ?: 1
         if (DeviceStore.triggerCount(context) >= need) {
-            // Manual / schedule loop forever (stop only on toggle-off / window
-            // end); signal mode finishes after its cycle.
-            val loop = !DeviceStore.isSignalMode(context)
-            val hasNext = DeviceStore.advancePaymentOrFinish(context, loop)
+            // Advance to the next block; when all blocks are done the session
+            // finishes (device reports done → server stops it and sends a report).
+            val hasNext = DeviceStore.advancePaymentOrFinish(context)
             Log.i(TAG, if (hasNext) "Advanced to next block" else "All payments done")
         }
         SenderService.kick(context)
