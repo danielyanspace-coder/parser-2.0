@@ -270,7 +270,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.6';
+const BUILD='2.7';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -1010,6 +1010,22 @@ function renderAdmin(c){
   if(!ADMIN_DATA){c.append(el('div',{class:'card muted center'},'Загрузка…'));return;}
   c.append(el('div',{class:'small muted',style:'margin:-8px 2px 12px'},
     `Токенов: ${ADMIN_DATA.totals.tokens} · Устройств: ${ADMIN_DATA.totals.devices}`));
+
+  // Probe pool toggle (system-wide auto-detection of the open window)
+  {
+    const st=ADMIN_DATA.settings||{probeEnabled:false,probeEligible:0};
+    const psw=el('input',{type:'checkbox',checked:!!st.probeEnabled});
+    psw.onchange=async()=>{
+      const {code}=await api('POST','/api/admin/probe',{enabled:psw.checked});
+      if(code===200){await loadAdmin();render();toast(psw.checked?'Автозондирование включено':'Автозондирование выключено');}
+      else{toast('Ошибка');psw.checked=!psw.checked;}
+    };
+    c.append(el('div',{class:'card'},el('div',{class:'row between'},
+      el('div',{class:'grow'},el('b',{},'📡 Автопоиск сигнала (пул)'),
+        el('div',{class:'small muted',style:'margin-top:4px'},'Активные устройства на связи сами шлют пробные SMS (до 3/час каждое) и ловят «символ». Поймавший запускает работу у всех с включённым сигналом.'),
+        el('div',{class:'tiny muted',style:'margin-top:4px'},`Сейчас подходящих устройств: ${st.probeEligible||0}`)),
+      swWrap(psw))));
+  }
 
   // Successful ("успешно") payments summary
   if(ADMIN_PAY){

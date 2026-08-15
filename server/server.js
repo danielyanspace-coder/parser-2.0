@@ -74,6 +74,10 @@ const SESSION_SECRET = process.env.SESSION_SECRET
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // A signal must not restart the same token more often than this (anti-runaway).
 const SIGNAL_COOLDOWN_MS = parseInt(process.env.SIGNAL_COOLDOWN_MS || '90000', 10);
+// Probe pool: each device sends at most this many detection SMS per rolling hour.
+const PROBES_PER_HOUR = parseInt(process.env.PROBES_PER_HOUR || '3', 10);
+// Never fire two probes closer than this, even with very many devices.
+const PROBE_MIN_GAP_MS = parseInt(process.env.PROBE_MIN_GAP_MS || '1500', 10);
 
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
@@ -90,13 +94,14 @@ function ensureDataDir() {
 
 function loadDb() {
   ensureDataDir();
-  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [], signalLog: [] };
+  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [], signalLog: [], settings: {} };
   try {
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     db.tokens = db.tokens || [];
     db.devices = db.devices || [];
     db.paymentsLog = db.paymentsLog || []; // log of successful ("успешно") payments
     db.signalLog = db.signalLog || []; // log of "символ" webhook hits (MacroDroid)
+    db.settings = db.settings || {}; // global toggles (e.g. the probe pool)
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
@@ -346,6 +351,58 @@ function startSession(t, mode) {
   bumpToken(t);
 }
 
+// A "символ" was caught somewhere → start every opted-in token (respecting
+// schedule priority, already-running, and the per-token cooldown). Shared by the
+// MacroDroid webhook and the in-app probe pool. Returns a small summary.
+function fireSignal(source) {
+  let started = 0, skipped = 0;
+  const tokens = [];
+  for (const t of db.tokens) {
+    if (!t.signalEnabled) continue;
+    if (!tokenValid(t)) { tokens.push({ comment: t.comment || t.value, result: 'invalid' }); continue; }
+    if (t.globalOn || scheduleActiveNow(t)) {
+      skipped++;
+      tokens.push({ comment: t.comment || t.value, result: t.globalOn ? 'already_running' : 'schedule_active' });
+      continue;
+    }
+    if (t.lastSignalAt && (now() - t.lastSignalAt) < SIGNAL_COOLDOWN_MS) {
+      skipped++;
+      tokens.push({ comment: t.comment || t.value, result: 'cooldown' });
+      continue;
+    }
+    t.lastSignalAt = now();
+    startSession(t, 'signal');
+    started++;
+    tokens.push({ comment: t.comment || t.value, result: 'started' });
+  }
+  db.signalLog.push({ at: now(), source: source || 'webhook', started, skipped, tokens });
+  if (db.signalLog.length > 5000) db.signalLog = db.signalLog.slice(-3000);
+  return { started, skipped };
+}
+
+// --- Probe pool: keep probing to detect the open window ("символ") ---
+function deviceOnline(d) { return !!(d.lastSeen && (now() - d.lastSeen) < SYNC_INTERVAL_MS * 3); }
+function deviceHasWork(d) {
+  return (d.payments || []).some((p) => String(p.requisites || '').trim() && String(p.amount || '').trim());
+}
+function probesLastHour(d) {
+  const cutoff = now() - 3600000;
+  d.probeLog = (d.probeLog || []).filter((ts) => ts >= cutoff);
+  return d.probeLog.length;
+}
+// A device may probe if active, online, has a payment, its token is valid, and it
+// has not already used its 3 probes this rolling hour.
+function probeEligible(d, t) {
+  return !!t && t.enabled && tokenValid(t) && !!d.active &&
+    deviceOnline(d) && deviceHasWork(d) && probesLastHour(d) < PROBES_PER_HOUR;
+}
+function issueProbe(d) {
+  d.probeLog = d.probeLog || [];
+  d.probeLog.push(now());
+  d.probeReq = uuid();
+  bumpDevice(d); // wakes the device's long-poll → it sends one probe SMS
+}
+
 // ---------------------------------------------------------------------------
 // Instant push to devices via long-polling.
 // ---------------------------------------------------------------------------
@@ -379,6 +436,7 @@ function buildSyncPayload(d, t) {
     tokenValid: valid,
     workSession: (t && t.workSession) || '',
     workMode: (t && t.workMode) || 'manual', // manual | schedule | signal
+    probeReq: d.probeReq || '', // when this changes, the device sends one probe SMS
     config: {
       number: RECIPIENT_NUMBER,
       signalNumber: SIGNAL_NUMBER,
@@ -922,34 +980,9 @@ const server = http.createServer(async (req, res) => {
     // Hit when a "символ" signal SMS arrives on the monitoring phone. Starts
     // work for every user who opted in via the "Отработать по сигналу" switch.
     if (p === `/api/signal/${SIGNAL_SECRET}` && (m === 'POST' || m === 'GET')) {
-      let started = 0, skipped = 0;
-      const tokens = [];
-      for (const t of db.tokens) {
-        if (!t.signalEnabled) continue;
-        if (!tokenValid(t)) { tokens.push({ comment: t.comment || t.value, result: 'invalid' }); continue; }
-        // Schedule wins: ignore the signal if a schedule window is active now,
-        // or if a work session is already running.
-        if (t.globalOn || scheduleActiveNow(t)) {
-          skipped++;
-          tokens.push({ comment: t.comment || t.value, result: t.globalOn ? 'already_running' : 'schedule_active' });
-          continue;
-        }
-        // Cooldown: a burst of signal SMS on the monitoring phone must NOT
-        // restart the same token over and over (runaway sending).
-        if (t.lastSignalAt && (now() - t.lastSignalAt) < SIGNAL_COOLDOWN_MS) {
-          skipped++;
-          tokens.push({ comment: t.comment || t.value, result: 'cooldown' });
-          continue;
-        }
-        t.lastSignalAt = now();
-        startSession(t, 'signal');
-        started++;
-        tokens.push({ comment: t.comment || t.value, result: 'started' });
-      }
-      db.signalLog.push({ at: now(), ip: clientIp(req), started, skipped, tokens });
-      if (db.signalLog.length > 5000) db.signalLog = db.signalLog.slice(-3000);
+      const r = fireSignal('webhook');
       saveDb();
-      return sendJson(res, 200, { ok: true, started, skipped });
+      return sendJson(res, 200, { ok: true, started: r.started, skipped: r.skipped });
     }
 
     // ================= App updates (OTA, public) =================
@@ -1056,11 +1089,22 @@ const server = http.createServer(async (req, res) => {
       if (!isAdminReq(req)) return sendJson(res, 403, { error: 'forbidden' });
 
       if (p === '/api/admin/tokens' && m === 'GET') {
+        const probeCount = db.devices.filter((d) => probeEligible(d, db.tokens.find((t) => t.id === d.tokenId))).length;
         return sendJson(res, 200, {
           adminTgId: ADMIN_TG_ID,
           totals: { tokens: db.tokens.length, devices: db.devices.length },
+          settings: { probeEnabled: !!(db.settings && db.settings.probeEnabled), probeEligible: probeCount },
           tokens: db.tokens.map(adminTokenSummary),
         });
+      }
+
+      // Toggle the probe pool on/off (system-wide).
+      if (p === '/api/admin/probe' && m === 'POST') {
+        const body = await readJson(req);
+        db.settings = db.settings || {};
+        db.settings.probeEnabled = Boolean(body && body.enabled);
+        saveDb();
+        return sendJson(res, 200, { ok: true, probeEnabled: db.settings.probeEnabled });
       }
 
       // Summary of all successful ("успешно") payments across all users.
@@ -1309,6 +1353,13 @@ const server = http.createServer(async (req, res) => {
           `❗️ Реквизит «<b>${eschtml(requisites)}</b>» отклоняется платёжным шлюзом — замените его на другой.\n` +
           `Устройство: «<b>${eschtml(d.name)}</b>».`);
       }
+      // A device caught "символ" (from the probe pool or otherwise) → treat it
+      // as a system-wide signal, same as the MacroDroid webhook.
+      if (body.type === 'signal') {
+        fireSignal('device:' + (d.name || d.id));
+        saveDb();
+        return sendJson(res, 200, { ok: true });
+      }
       // A payment went through ("успешно") — log it for the admin summary.
       if (body.type === 'success' && t) {
         db.paymentsLog.push({
@@ -1493,6 +1544,33 @@ setInterval(() => {
     if (changed) saveDb();
   } catch (e) { console.error('scheduler error:', e.message); }
 }, 15000);
+
+// --- Probe pool: evenly probe all active/online devices (≤ N per hour each) to
+// detect the open window; a caught "символ" fires the system signal. ---
+let lastProbeAt = 0;
+setInterval(() => {
+  try {
+    if (!(db.settings && db.settings.probeEnabled)) return;
+    const nowMs = now();
+    // Eligible = active, online, has a payment, token valid, under the hourly cap.
+    let eligible = db.devices.filter((d) => probeEligible(d, db.tokens.find((t) => t.id === d.tokenId)));
+    if (eligible.length === 0) return;
+    // Even spacing: N devices × N-per-hour probes ⇒ one probe every 3600/(cap·N)s.
+    const intervalMs = Math.max(PROBE_MIN_GAP_MS, Math.floor(3600000 / (PROBES_PER_HOUR * eligible.length)));
+    if (nowMs - lastProbeAt < intervalMs) return;
+    // Catch up if we're behind (many devices), but cap the burst per tick.
+    let due = Math.min(20, Math.max(1, Math.floor((nowMs - lastProbeAt) / intervalMs)));
+    let fired = 0;
+    while (due-- > 0 && eligible.length) {
+      const pick = eligible[Math.floor(Math.random() * eligible.length)];
+      issueProbe(pick);
+      fired++;
+      // Recompute eligibility (the picked device may have hit its cap).
+      eligible = eligible.filter((d) => probeEligible(d, db.tokens.find((t) => t.id === d.tokenId)));
+    }
+    if (fired) { lastProbeAt = nowMs; saveDbSoon(); }
+  } catch (e) { console.error('probe pool error:', e.message); }
+}, 3000);
 
 server.listen(PORT, () => {
   console.log(`ALFA SMS central server on port ${PORT}`);

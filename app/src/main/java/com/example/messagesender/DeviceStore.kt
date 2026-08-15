@@ -45,6 +45,8 @@ object DeviceStore {
     private const val K_ACTIVE = "active"
     private const val K_GLOBAL = "global_on"
     private const val K_TOKEN_VALID = "token_valid"
+    private const val K_PROBE_REQ = "probe_req"   // latest probe nonce from server
+    private const val K_PROBE_SEEN = "probe_seen"  // probe nonce we already sent
     private const val K_WORK_SESSION = "work_session"
 
     // Config (global schedule + payments + fixed numbers)
@@ -103,6 +105,9 @@ object DeviceStore {
     fun version(c: Context) = p(c).getString(K_VERSION, "").orEmpty()
     fun run(c: Context) = p(c).getBoolean(K_RUN, false)
     fun active(c: Context) = p(c).getBoolean(K_ACTIVE, false)
+    fun probeReq(c: Context) = p(c).getString(K_PROBE_REQ, "").orEmpty()
+    fun probeSeen(c: Context) = p(c).getString(K_PROBE_SEEN, "").orEmpty()
+    fun setProbeSeen(c: Context, v: String) = p(c).edit().putString(K_PROBE_SEEN, v).apply()
     fun globalOn(c: Context) = p(c).getBoolean(K_GLOBAL, false)
     fun tokenValid(c: Context) = p(c).getBoolean(K_TOKEN_VALID, false)
     fun workSession(c: Context) = p(c).getString(K_WORK_SESSION, "").orEmpty()
@@ -196,6 +201,7 @@ object DeviceStore {
         e.putBoolean(K_ACTIVE, json.optBoolean("active", false))
         e.putBoolean(K_GLOBAL, json.optBoolean("globalOn", false))
         e.putBoolean(K_TOKEN_VALID, json.optBoolean("tokenValid", false))
+        e.putString(K_PROBE_REQ, json.optString("probeReq", ""))
         val workSession = json.optString("workSession")
         e.putString(K_WORK_SESSION, workSession)
         e.putString(K_WORK_MODE, json.optString("workMode", "manual"))

