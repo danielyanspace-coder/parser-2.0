@@ -1222,6 +1222,17 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
       }
 
+      // Bulk activate / deactivate ALL devices of the token in one tap.
+      if (p === '/api/mini/devices/active' && m === 'POST') {
+        const body = await readJson(req);
+        const on = Boolean(body && body.active);
+        for (const d of tokenDevices(t.id)) {
+          if (!!d.active !== on) { d.active = on; bumpDevice(d); }
+        }
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
+      }
+
       const mdev = p.match(/^\/api\/mini\/device\/([^/]+)(?:\/(\w+))?$/);
       if (mdev) {
         const d = miniDevice(t, mdev[1]);

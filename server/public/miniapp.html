@@ -270,7 +270,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.3';
+const BUILD='2.6';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -594,6 +594,18 @@ function renderHome(c){
   c.append(addBtn);
   if(!canAdd&&s.valid) c.append(el('div',{class:'tiny muted center',style:'margin:-6px 0 12px'},
     s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств — обратитесь к администратору.':'Добавление недоступно.'));
+
+  // bulk activate / deactivate all devices
+  if(s.valid && s.devices.length){
+    const bulk=async(on)=>{
+      const {code,data}=await api('POST','/api/mini/devices/active',{active:on});
+      if(code===200){STATE=data.state;render();toast(on?'Все устройства в работе':'Все устройства сняты с работы');}
+      else toast('Ошибка');
+    };
+    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},
+      el('button',{class:'btn sec small',style:'flex:1',textContent:'✅ Поставить все в работу',onclick:()=>bulk(true)}),
+      el('button',{class:'btn sec small',style:'flex:1',textContent:'⛔ Снять все с работы',onclick:()=>bulk(false)})));
+  }
 
   // device list
   c.append(el('div',{class:'row between',style:'margin:2px 2px 6px'},

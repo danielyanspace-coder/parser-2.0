@@ -176,15 +176,17 @@ class SenderService : Service() {
             return
         }
 
+        val signal = DeviceStore.isSignalMode(this)
+
         val payment = DeviceStore.currentPayment(this)
         if (payment == null || payment.message().isBlank()) {
-            // No (more) payment blocks to send.
-            finishSession()
+            // Nothing (more) to send. In signal mode this ends the session; in
+            // manual/schedule we just idle — the user (or a schedule window /
+            // the off toggle / "снять все с работы") decides when to stop.
+            if (signal) finishSession()
             reschedule(IDLE_MS)
             return
         }
-
-        val signal = DeviceStore.isSignalMode(this)
 
         // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no
         // "символ" arrives, give up (this device did its part for the signal).

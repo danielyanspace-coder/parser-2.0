@@ -53,8 +53,11 @@ class SmsReceiver : BroadcastReceiver() {
             return
         }
         if (fromGateway && body.contains(DeviceStore.stopSessionWord(context), ignoreCase = true)) {
-            // "Оплата не произведена" — this device is finished for the session.
-            if (!DeviceStore.isSessionDone(context)) {
+            // "Оплата не произведена". This ends the device's session ONLY in
+            // signal mode. In manual / schedule work the user controls stopping
+            // (off toggle, "снять все с работы", or the schedule window ending),
+            // so we keep working here.
+            if (DeviceStore.isSignalMode(context) && !DeviceStore.isSessionDone(context)) {
                 DeviceStore.setSessionDone(context, true)
                 pushStatus(context)
             }
