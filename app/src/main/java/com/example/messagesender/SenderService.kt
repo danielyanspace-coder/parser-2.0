@@ -40,11 +40,6 @@ class SenderService : Service() {
     @Volatile private var resyncNow = false
     private var unauthorizedCount = 0
 
-    // Anti-runaway: cap how many times we resend a payment while waiting for a
-    // "символ" that never comes (bad requisite / lost signal). Reset on progress.
-    private var lastProgressKey = ""
-    private var sendsWithoutTrigger = 0
-
     private var sendExec: ScheduledExecutorService? = null
     private var pendingTick: ScheduledFuture<*>? = null
     private val tickLock = Any()
@@ -189,12 +184,6 @@ class SenderService : Service() {
             return
         }
 
-        // Reset the anti-runaway counter whenever real progress happens
-        // (new session, next payment block, or a "символ" was counted).
-        val progressKey = DeviceStore.workSession(this) + "|" +
-            DeviceStore.paymentIndex(this) + "|" + DeviceStore.triggerCount(this)
-        if (progressKey != lastProgressKey) { lastProgressKey = progressKey; sendsWithoutTrigger = 0 }
-
         val signal = DeviceStore.isSignalMode(this)
 
         // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no
@@ -223,17 +212,10 @@ class SenderService : Service() {
         }
 
         if (allowed) {
-            // Circuit breaker: if we've resent this payment many times with no
-            // "символ" in reply, stop instead of spamming forever.
-            if (!signal && sendsWithoutTrigger >= MAX_NO_TRIGGER) {
-                Log.w(TAG, "No 'символ' after $sendsWithoutTrigger sends; stopping to avoid runaway")
-                SenderStatus.lastError = "Нет ответа «символ» — остановлено"
-                finishSession()
-                reschedule(IDLE_MS)
-                return
-            }
+            // Manual / schedule work keeps sending on the interval until the user
+            // turns it off (or the session ends naturally on "оплата не
+            // произведена" / all payments done). No automatic cap here.
             sendOnce(payment)
-            if (!signal) sendsWithoutTrigger++
             reschedule(DeviceStore.intervalMs(this))
         } else {
             if (windows.isNotEmpty() && !DeviceStore.repeatDaily(this) &&
@@ -453,8 +435,6 @@ class SenderService : Service() {
         private const val STALE_MS = 35_000L
         /** Consecutive 403s before we treat the pairing as truly revoked. */
         private const val MAX_UNAUTHORIZED = 4
-        /** Max resends of a payment with no "символ" reply before auto-stopping. */
-        private const val MAX_NO_TRIGGER = 20
 
         /** Signal mode: number of probe sends of the first payment, and spacing. */
         private const val SIGNAL_BURST_COUNT = 3

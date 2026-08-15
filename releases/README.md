@@ -6,6 +6,7 @@
 
 | Файл | versionCode | versionName |
 |------|-------------|-------------|
+| `alfa-sms-v2.5.apk` | 6 | 2.5 |
 | `alfa-sms-v2.4.apk` | 5 | 2.4 |
 | `alfa-sms-v2.2.apk` | 4 | 2.2 |
 
@@ -14,10 +15,10 @@
 cd /path/to/parser-2.0 && git pull && sudo systemctl restart alfa-sms
 
 # Залить APK и объявить версию (подставь свой ADMIN_PASSWORD):
-curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.4.apk \
+curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.5.apk \
   https://project.alfa-vpn.ru/admin/apk
 curl -u admin:ВАШ_ADMIN_PASSWORD -X POST -H "Content-Type: application/json" \
-  -d '{"versionCode":5,"versionName":"2.4","notes":"Учёт успешных платежей, защита от лишних отправок"}' \
+  -d '{"versionCode":6,"versionName":"2.5","notes":"Немедленная работа шлёт до выключения ползунка"}' \
   https://project.alfa-vpn.ru/admin/release
 ```
 После этого пользователям при открытии приложения предложит «Обновить».
