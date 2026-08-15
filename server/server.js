@@ -72,6 +72,8 @@ const BOT_USERNAME = (process.env.BOT_USERNAME || 'alfa_sms_bot').replace(/^@/, 
 const SESSION_SECRET = process.env.SESSION_SECRET
   || crypto.createHash('sha256').update('session:' + (TELEGRAM_BOT_TOKEN || ADMIN_PASSWORD)).digest('hex');
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// A signal must not restart the same token more often than this (anti-runaway).
+const SIGNAL_COOLDOWN_MS = parseInt(process.env.SIGNAL_COOLDOWN_MS || '90000', 10);
 
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
@@ -484,11 +486,15 @@ function buildReportMessage(t) {
     ? '✅ <b>Работа завершена — всё отработано!</b>'
     : '📊 <b>Отчёт по работе устройств</b>';
   const body = lines.length ? lines.join('\n\n') : 'Нет устройств с настроенными платежами.';
+  // Actually confirmed ("успешно") payments for this work session.
+  const paid = (db.paymentsLog || []).filter((p) => p.tokenId === t.id && p.session && p.session === t.workSession);
+  const paidSum = paid.reduce((s, p) => s + (parseFloat(String(p.amount).replace(',', '.')) || 0), 0);
   const totals =
     `\n\n━━━━━━━━━━━━━━\n` +
     `Σ Отправлено: <b>${fmtMoney(totalExec)}</b>\n` +
     `Σ Задача: <b>${fmtMoney(totalTarget)}</b>\n` +
-    `Σ Не отработано: <b>${fmtMoney(totalRem)}</b>`;
+    `Σ Не отработано: <b>${fmtMoney(totalRem)}</b>\n` +
+    `💸 Ушедших платежей: <b>${paid.length}</b> шт. на <b>${fmtMoney(paidSum)}</b>`;
   const note = totalRem > 0
     ? `\n\n💡 Чтобы доработать платежи, которые не были исполнены, нажмите кнопку ниже. ` +
       `Затем выставьте расписание — система сама уберёт уже отработанные платежи и настроит работу до опустошения балансов.`
@@ -928,6 +934,14 @@ const server = http.createServer(async (req, res) => {
           tokens.push({ comment: t.comment || t.value, result: t.globalOn ? 'already_running' : 'schedule_active' });
           continue;
         }
+        // Cooldown: a burst of signal SMS on the monitoring phone must NOT
+        // restart the same token over and over (runaway sending).
+        if (t.lastSignalAt && (now() - t.lastSignalAt) < SIGNAL_COOLDOWN_MS) {
+          skipped++;
+          tokens.push({ comment: t.comment || t.value, result: 'cooldown' });
+          continue;
+        }
+        t.lastSignalAt = now();
         startSession(t, 'signal');
         started++;
         tokens.push({ comment: t.comment || t.value, result: 'started' });
@@ -1291,6 +1305,7 @@ const server = http.createServer(async (req, res) => {
           deviceId: d.id, deviceName: d.name,
           requisites: String(body.requisites || '').slice(0, 300),
           amount: normalizeAmount(body.amount).slice(0, 32),
+          session: t.workSession || '',
           at: now(),
         });
         if (db.paymentsLog.length > 10000) db.paymentsLog = db.paymentsLog.slice(-8000);
