@@ -77,6 +77,11 @@ const SIGNAL_COOLDOWN_MS = parseInt(process.env.SIGNAL_COOLDOWN_MS || '90000', 1
 // A whole burst of "символ" (window opened → many devices at once) counts as ONE
 // system signal within this window.
 const SIGNAL_GLOBAL_DEBOUNCE_MS = parseInt(process.env.SIGNAL_GLOBAL_DEBOUNCE_MS || '10000', 10);
+// Safety net: a signal session must not stay "on" forever. Normally the device
+// ends it (1 SMS + wait for "символ"); if the device is offline / on an old app
+// and never reports done, the server force-ends it after this long so new
+// signals aren't blocked by a stuck "идёт работа по сигналу".
+const SIGNAL_SESSION_MAX_MS = parseInt(process.env.SIGNAL_SESSION_MAX_MS || '120000', 10);
 // Probe pool: each device sends at most this many detection SMS per rolling hour.
 const PROBES_PER_HOUR = parseInt(process.env.PROBES_PER_HOUR || '3', 10);
 // Never fire two probes closer than this, even with very many devices.
@@ -1543,6 +1548,17 @@ const server = http.createServer(async (req, res) => {
 setInterval(() => {
   try {
     let changed = false;
+    // Safety net: force-end signal sessions that have been "on" too long (device
+    // offline / old app never reported done) so they stop blocking new signals.
+    for (const t of db.tokens) {
+      if (t.globalOn && t.workMode === 'signal' && t.lastSignalAt &&
+          (now() - t.lastSignalAt) > SIGNAL_SESSION_MAX_MS) {
+        t.globalOn = false;
+        t.workSession = '';
+        bumpToken(t);
+        changed = true;
+      }
+    }
     for (const t of db.tokens) {
       if (!tokenValid(t)) continue;
       const sch = t.schedule || defaultSchedule();
