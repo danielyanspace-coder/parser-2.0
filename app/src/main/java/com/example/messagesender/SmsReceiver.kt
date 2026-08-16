@@ -71,13 +71,16 @@ class SmsReceiver : BroadcastReceiver() {
         if (fromSignal && body.contains(stopWord, ignoreCase = true)) {
             // Always answer "Ок" — even if the system is off.
             replyOk(context, sender)
-            // ANY "символ" on ANY device is a signal for the whole system,
-            // regardless of why this device was sending (pool / interval /
-            // immediate). The server dedupes via its per-token cooldown.
-            reportSignal(context)
-            // Normal flow: while working, "символ" pauses to wait for "успешно",
-            // then advances to the next block (same as before).
-            if (working) countTrigger(context)
+            if (working) {
+                // The device is doing its own work: this "символ" belongs to that
+                // flow (pause → wait for "успешно" → advance). It is NOT a new
+                // system signal, so we do not fan it out.
+                countTrigger(context)
+            } else {
+                // Idle device caught "символ" (e.g. a probe found the open window)
+                // → this is a fresh external signal for the whole system.
+                reportSignal(context)
+            }
             return
         }
         if (fromSignal && body.contains(resumeWord, ignoreCase = true)) {

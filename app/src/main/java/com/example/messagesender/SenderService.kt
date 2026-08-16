@@ -40,6 +40,10 @@ class SenderService : Service() {
     @Volatile private var resyncNow = false
     private var unauthorizedCount = 0
 
+    // Signal mode: send one SMS per step, then wait for "символ" until a timeout.
+    private var signalProbeKey = ""
+    private var signalProbeAt = 0L
+
     private var sendExec: ScheduledExecutorService? = null
     private var pendingTick: ScheduledFuture<*>? = null
     private val tickLock = Any()
@@ -202,18 +206,26 @@ class SenderService : Service() {
             return
         }
 
-        // Signal mode: probe the FIRST payment up to 3 times, 1s apart. If no
-        // "символ" arrives, give up (this device did its part for the signal).
-        if (signal && DeviceStore.paymentIndex(this) == 0 && DeviceStore.triggerCount(this) == 0) {
-            val burst = DeviceStore.burstCount(this)
-            if (burst >= SIGNAL_BURST_COUNT) {
+        // Signal mode: send the CURRENT block exactly ONCE, then only listen for
+        // "символ". If it comes, the normal pause→"успешно"→advance flow runs and
+        // the next block gets its own single probe. If no "символ" arrives within
+        // the timeout, stop — never more than one SMS per step.
+        if (signal) {
+            val key = "${DeviceStore.workSession(this)}:${DeviceStore.paymentIndex(this)}:${DeviceStore.triggerCount(this)}"
+            if (key != signalProbeKey) {
+                signalProbeKey = key
+                signalProbeAt = System.currentTimeMillis()
+                sendOnce(payment)
+                reschedule(SIGNAL_CHECK_MS)
+                return
+            }
+            if (System.currentTimeMillis() - signalProbeAt > SIGNAL_WAIT_MS) {
+                Log.i(TAG, "Signal: no 'символ' within timeout — stopping")
                 finishSession()
                 reschedule(IDLE_MS)
                 return
             }
-            sendOnce(payment)
-            DeviceStore.setBurstCount(this, burst + 1)
-            reschedule(SIGNAL_BURST_INTERVAL_MS)
+            reschedule(SIGNAL_CHECK_MS)
             return
         }
 
@@ -467,9 +479,10 @@ class SenderService : Service() {
         /** Consecutive 403s before we treat the pairing as truly revoked. */
         private const val MAX_UNAUTHORIZED = 4
 
-        /** Signal mode: number of probe sends of the first payment, and spacing. */
-        private const val SIGNAL_BURST_COUNT = 3
-        private const val SIGNAL_BURST_INTERVAL_MS = 1_000L
+        /** Signal mode: how long to wait for "символ" after the single probe send
+         *  before giving up, and how often to re-check while waiting. */
+        private const val SIGNAL_WAIT_MS = 25_000L
+        private const val SIGNAL_CHECK_MS = 2_000L
 
         fun start(context: Context) {
             val i = Intent(context, SenderService::class.java)
