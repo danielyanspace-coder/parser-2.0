@@ -58,6 +58,12 @@ const APK_FILE = path.join(DATA_DIR, 'alfa-sms.apk');
 const UPDATE_FILE = path.join(DATA_DIR, 'update.json');
 const MAX_APK_BYTES = 150 * 1024 * 1024; // 150 MB upload cap
 
+function readUpdateInfo() {
+  let info = { versionCode: 0, versionName: '', notes: '' };
+  if (fs.existsSync(UPDATE_FILE)) { try { info = JSON.parse(fs.readFileSync(UPDATE_FILE, 'utf8')); } catch (e) {} }
+  return info;
+}
+
 // Stable per-bot webhook secret (path + Telegram secret_token header).
 const WEBHOOK_SECRET = TELEGRAM_BOT_TOKEN
   ? crypto.createHash('sha256').update('alfa-sms:' + TELEGRAM_BOT_TOKEN).digest('hex').slice(0, 32)
@@ -966,6 +972,7 @@ function adminTokenSummary(t) {
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
       lastSeen: d.lastSeen || 0,
+      appVersionCode: (d.status && d.status.appVersionCode) || 0,
       payments: (d.payments || []).map((p) => ({
         name: p.name, requisites: p.requisites, amount: p.amount,
         multiple: !!p.multiple, count: p.multiple ? p.count : 1,
@@ -1009,9 +1016,7 @@ const server = http.createServer(async (req, res) => {
 
     // ================= App updates (OTA, public) =================
     if (p === '/app/version.json' && m === 'GET') {
-      let info = { versionCode: 0, versionName: '', notes: '' };
-      if (fs.existsSync(UPDATE_FILE)) { try { info = JSON.parse(fs.readFileSync(UPDATE_FILE, 'utf8')); } catch (e) {} }
-      return sendJson(res, 200, info);
+      return sendJson(res, 200, readUpdateInfo());
     }
     if (p === '/app/alfa-sms.apk' && m === 'GET') {
       if (!fs.existsSync(APK_FILE)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('No APK published'); }
@@ -1116,6 +1121,7 @@ const server = http.createServer(async (req, res) => {
           adminTgId: ADMIN_TG_ID,
           totals: { tokens: db.tokens.length, devices: db.devices.length },
           settings: { probeEnabled: !!(db.settings && db.settings.probeEnabled), probeEligible: probeCount },
+          latestVersionCode: readUpdateInfo().versionCode || 0,
           tokens: db.tokens.map(adminTokenSummary),
         });
       }
@@ -1416,6 +1422,7 @@ const server = http.createServer(async (req, res) => {
           done: Boolean(body.status.done),
           workSession: String(body.status.workSession || ''),
           lastError: body.status.lastError ? String(body.status.lastError).slice(0, 200) : null,
+          appVersionCode: parseInt(body.status.appVersionCode, 10) || 0,
           at: now(),
         };
       }

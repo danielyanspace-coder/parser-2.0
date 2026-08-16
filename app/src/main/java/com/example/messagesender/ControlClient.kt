@@ -62,6 +62,7 @@ object ControlClient {
             .put("done", DeviceStore.isSessionDone(c))
             .put("workSession", DeviceStore.workSession(c))
             .put("lastError", SenderStatus.lastError ?: JSONObject.NULL)
+            .put("appVersionCode", BuildConfig.VERSION_CODE)
         val body = JSONObject()
             .put("deviceId", id)
             .put("secret", secret)

@@ -1154,9 +1154,14 @@ function adminTokenCard(t){
   details.append(el('div',{class:'kv'},'📅 Расписание: ',
     el('b',{},`интервал ${sc.intervalSec||'—'}с`),`, окна: `,el('b',{},winTxt),
     sc.repeatDaily?', ежедневно':'', sc.startAtMillis?(', старт '+new Date(sc.startAtMillis).toLocaleString('ru-RU')):''));
+  const latestVc=(ADMIN_DATA&&ADMIN_DATA.latestVersionCode)||0;
   (t.devices||[]).forEach(d=>{
     const pays=(d.payments||[]).map(p=>`${p.requisites}=${p.amount}`+(p.multiple?`×${p.count}`:'')).join('; ')||'нет платежей';
-    details.append(el('div',{class:'kv',style:'margin-top:5px'},`📱 ${d.name}${d.active?'':' (неактивно)'}: `,el('b',{},pays)));
+    const vc=d.appVersionCode||0;
+    const vcNode=vc?
+      (latestVc&&vc<latestVc?el('span',{style:'color:var(--danger)'},` · ⚠ устар. (v${vc}, актуальна v${latestVc})`):el('span',{class:'muted'},` · v${vc}`)):
+      el('span',{style:'color:var(--danger)'},' · ⚠ версия неизвестна (очень старый APK)');
+    details.append(el('div',{class:'kv',style:'margin-top:5px'},`📱 ${d.name}${d.active?'':' (неактивно)'}: `,el('b',{},pays),vcNode));
   });
   const toggle=el('button',{class:'btn ghost small',textContent:'▾ Расписание и платежи',style:'margin-top:6px'});
   toggle.onclick=()=>{const open=details.classList.toggle('hidden')===false;toggle.textContent=(open?'▴':'▾')+' Расписание и платежи';};
