@@ -162,13 +162,23 @@ class SenderService : Service() {
         // socket is probably stale (Doze / lost radio). Force a reconnect so the
         // device recovers on its own — critical for signal / schedule to fire.
         val last = SenderStatus.lastSyncAt
-        if (last > 0L && System.currentTimeMillis() - last > STALE_MS) {
+        val stale = last > 0L && System.currentTimeMillis() - last > STALE_MS
+        if (stale) {
             Log.i(TAG, "Sync stale; forcing reconnect")
             forceResync()
         }
 
         val running = DeviceStore.run(this)
         if (!running || DeviceStore.isSessionDone(this)) {
+            reschedule(IDLE_MS)
+            return
+        }
+
+        // Dead-man's-switch: never keep sending on a possibly-stale run flag. If
+        // we haven't had a fresh answer from the server recently, the "stop" it
+        // was told (e.g. the user switched work off while the phone was offline)
+        // may not have reached us — so pause until we reconnect and re-confirm.
+        if (stale) {
             reschedule(IDLE_MS)
             return
         }
