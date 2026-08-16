@@ -554,6 +554,11 @@ function participatingDevices(t) {
 }
 function sessionComplete(t) {
   if (!t.globalOn || !t.workSession) return false;
+  // "Немедленно" (manual) never auto-completes — it must run until the user
+  // explicitly turns it off (toggle or "Снять все с работы"). No signal, no
+  // "all payments done" device report, and no other automatic condition may
+  // stop it. Only 'signal' / 'schedule' sessions can finish this way.
+  if (t.workMode === 'manual') return false;
   const parts = participatingDevices(t);
   if (parts.length === 0) return false;
   return parts.every((d) => d.status && d.status.workSession === t.workSession && d.status.done);
