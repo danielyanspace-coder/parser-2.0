@@ -108,13 +108,14 @@ function ensureDataDir() {
 
 function loadDb() {
   ensureDataDir();
-  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [], signalLog: [], settings: {} };
+  if (!fs.existsSync(DB_FILE)) return { tokens: [], devices: [], paymentsLog: [], signalLog: [], stopLog: [], settings: {} };
   try {
     const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
     db.tokens = db.tokens || [];
     db.devices = db.devices || [];
     db.paymentsLog = db.paymentsLog || []; // log of successful ("успешно") payments
     db.signalLog = db.signalLog || []; // log of "символ" webhook hits (MacroDroid)
+    db.stopLog = db.stopLog || []; // log of automatic session stops (sessionComplete)
     db.settings = db.settings || {}; // global toggles (e.g. the probe pool)
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
@@ -122,7 +123,7 @@ function loadDb() {
     return db;
   } catch (e) {
     console.error('Failed to read db.json, starting empty:', e.message);
-    return { tokens: [], devices: [], paymentsLog: [], signalLog: [] };
+    return { tokens: [], devices: [], paymentsLog: [], signalLog: [], stopLog: [] };
   }
 }
 
@@ -1165,6 +1166,14 @@ const server = http.createServer(async (req, res) => {
         const recent = log.slice(-200).reverse();
         return sendJson(res, 200, { total: log.length, recent });
       }
+
+      // Log of automatic session stops (every participating device reported
+      // done) — "почему само остановилось" without guessing from a live poll.
+      if (p === '/api/admin/stops' && m === 'GET') {
+        const log = db.stopLog || [];
+        const recent = log.slice(-200).reverse();
+        return sendJson(res, 200, { total: log.length, recent });
+      }
       if (p === '/api/admin/token' && m === 'POST') {
         const body = await readJson(req);
         const days = parseInt(body && body.days, 10);
@@ -1452,6 +1461,21 @@ const server = http.createServer(async (req, res) => {
 
       // When every participating device has finished the session, stop and report.
       if (t && sessionComplete(t)) {
+        // Log the auto-stop with a snapshot of every currently-participating
+        // device, so a "почему само остановилось" report can be checked later
+        // instead of guessing from a live poll.
+        const parts = participatingDevices(t);
+        db.stopLog.push({
+          at: now(), tokenId: t.id, tokenComment: t.comment || '',
+          workSession: t.workSession, workMode: t.workMode,
+          devices: parts.map((pd) => ({
+            id: pd.id, name: pd.name, active: !!pd.active,
+            sentCount: (pd.status && pd.status.sentCount) || 0,
+            paymentIndex: (pd.status && pd.status.paymentIndex) || 0,
+            done: !!(pd.status && pd.status.done),
+          })),
+        });
+        if (db.stopLog.length > 3000) db.stopLog = db.stopLog.slice(-2000);
         t.globalOn = false;
         bumpToken(t);
         maybeSendReport(t);
