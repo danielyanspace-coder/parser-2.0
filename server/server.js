@@ -1409,17 +1409,13 @@ const server = http.createServer(async (req, res) => {
         saveDbSoon();
 
         if (t.telegramId) {
-          // How many payments are still planned for THIS device this session.
-          const planned = (d.payments || []).reduce((s, pp) => s + (pp.multiple ? Math.max(1, pp.count || 1) : 1), 0);
-          const doneThisSession = (db.paymentsLog || [])
-            .filter((x) => x.deviceId === d.id && x.session && x.session === t.workSession).length;
-          const remaining = planned > 0 ? String(Math.max(0, planned - doneThisSession)) : 'без лимита';
+          // Plain notification, no per-device counting logic.
           tgSend(t.telegramId,
             `✅ Платеж <b>${eschtml(amount)}</b> успешно отправлен.\n` +
             `Устройство: <b>${eschtml(d.name)}</b>\n` +
             `Реквизит: <b>${eschtml(requisites)}</b>\n` +
             `Дата и время: ${fmtDateTime(at)}\n` +
-            `Осталось отправить платежей на данном устройстве: <b>${remaining}</b>`);
+            `Осталось отправить платежей на данном устройстве: <b>без лимита</b>`);
         }
       }
       return sendJson(res, 200, { ok: true });
