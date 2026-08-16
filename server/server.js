@@ -74,6 +74,9 @@ const SESSION_SECRET = process.env.SESSION_SECRET
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // A signal must not restart the same token more often than this (anti-runaway).
 const SIGNAL_COOLDOWN_MS = parseInt(process.env.SIGNAL_COOLDOWN_MS || '90000', 10);
+// A whole burst of "символ" (window opened → many devices at once) counts as ONE
+// system signal within this window.
+const SIGNAL_GLOBAL_DEBOUNCE_MS = parseInt(process.env.SIGNAL_GLOBAL_DEBOUNCE_MS || '10000', 10);
 // Probe pool: each device sends at most this many detection SMS per rolling hour.
 const PROBES_PER_HOUR = parseInt(process.env.PROBES_PER_HOUR || '3', 10);
 // Never fire two probes closer than this, even with very many devices.
@@ -354,7 +357,17 @@ function startSession(t, mode) {
 // A "символ" was caught somewhere → start every opted-in token (respecting
 // schedule priority, already-running, and the per-token cooldown). Shared by the
 // MacroDroid webhook and the in-app probe pool. Returns a small summary.
+let LAST_GLOBAL_SIGNAL_AT = 0;
 function fireSignal(source) {
+  // Global debounce: when a window opens, "символ" hits many devices within a
+  // second or two. Collapse that whole burst into a single system fan-out.
+  const nowMs = now();
+  if (nowMs - LAST_GLOBAL_SIGNAL_AT < SIGNAL_GLOBAL_DEBOUNCE_MS) {
+    db.signalLog.push({ at: nowMs, source: source || 'webhook', debounced: true, started: 0, skipped: 0, tokens: [] });
+    if (db.signalLog.length > 5000) db.signalLog = db.signalLog.slice(-3000);
+    return { started: 0, skipped: 0, debounced: true };
+  }
+  LAST_GLOBAL_SIGNAL_AT = nowMs;
   let started = 0, skipped = 0;
   const tokens = [];
   for (const t of db.tokens) {
@@ -717,6 +730,10 @@ function tokenStateView(t, viewerId) {
     deviceCount: devices.length,
     canAddDevice: tokenValid(t) && devices.length < (t.deviceLimit || 0),
     globalOn: !!t.globalOn,
+    workMode: t.workMode || 'manual',
+    // The "Начать немедленную работу" toggle reflects ONLY user-started manual
+    // work — not signal / schedule sessions (which also set globalOn).
+    manualOn: !!t.globalOn && (t.workMode || 'manual') === 'manual',
     signalEnabled: !!t.signalEnabled,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,

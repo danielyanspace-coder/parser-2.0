@@ -270,7 +270,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.11';
+const BUILD='2.12';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -548,8 +548,9 @@ function renderHome(c){
       el('button',{class:'btn ghost small',textContent:'Сменить',onclick:()=>reset(IS_DESKTOP?'weblogin':'token')}))));
   }
 
-  // global work toggle
-  const gsw=el('input',{type:'checkbox',checked:!!s.globalOn,disabled:!s.valid});
+  // global work toggle — reflects ONLY user-started manual work (not signal /
+  // schedule sessions, which also run but must not flip this toggle).
+  const gsw=el('input',{type:'checkbox',checked:!!s.manualOn,disabled:!s.valid});
   gsw.onchange=async()=>{
     const {code,data}=await api('POST','/api/mini/global',{on:gsw.checked});
     if(code===200){STATE=data.state;render();toast(gsw.checked?'Все устройства в работе':'Устройства остановлены');}
@@ -559,6 +560,17 @@ function renderHome(c){
     el('div',{class:'grow'},el('div',{class:'ttl'},'Начать немедленную работу со всех устройств'),
       el('div',{class:'desc'},'Мгновенный запуск по заданным настройкам. Неактивные устройства не участвуют.')),
     swWrap(gsw))));
+  // If work is running but NOT via this manual toggle, show it as read-only info.
+  if(s.globalOn && !s.manualOn){
+    const label=s.workMode==='signal'?'📡 Идёт работа по сигналу':'📅 Идёт работа по расписанию';
+    c.append(el('div',{class:'card',style:'border-color:var(--accent);background:var(--card2)'},
+      el('div',{class:'row between'},
+        el('div',{},el('b',{},label),el('div',{class:'small muted',style:'margin-top:2px'},'Запущено автоматически, не тумблером «Немедленно».')),
+        el('button',{class:'btn ghost small',textContent:'Остановить',onclick:async()=>{
+          const {code,data}=await api('POST','/api/mini/global',{on:false});
+          if(code===200){STATE=data.state;render();toast('Остановлено');}else toast('Ошибка');
+        }}))));
+  }
 
   // signal-driven work
   const sigsw=el('input',{type:'checkbox',checked:!!s.signalEnabled,disabled:!s.valid});
