@@ -294,6 +294,12 @@ function fmtMoney(n) {
   const s = (Math.round(n * 100) / 100).toString().replace('.', ',');
   return s.replace(/\B(?=(\d{3})+(?![\d,]))/g, ' ');
 }
+// "DD.MM HH:MM:SS" in the server's timezone (TZ env = users' timezone, MSK).
+function fmtDateTime(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 // Sanitizes an incoming payments array. Empty/absent -> [] (device unconfigured).
 function sanitizePayments(input) {
@@ -1388,18 +1394,33 @@ const server = http.createServer(async (req, res) => {
         saveDb();
         return sendJson(res, 200, { ok: true });
       }
-      // A payment went through ("успешно") — log it for the admin summary.
+      // A payment went through ("успешно") — log it for the admin summary and
+      // notify the owner immediately (a message per successful payment).
       if (body.type === 'success' && t) {
+        const requisites = String(body.requisites || '').slice(0, 300);
+        const amount = normalizeAmount(body.amount).slice(0, 32);
+        const at = now();
         db.paymentsLog.push({
           tokenId: t.id, tokenComment: t.comment || '',
           deviceId: d.id, deviceName: d.name,
-          requisites: String(body.requisites || '').slice(0, 300),
-          amount: normalizeAmount(body.amount).slice(0, 32),
-          session: t.workSession || '',
-          at: now(),
+          requisites, amount, session: t.workSession || '', at,
         });
         if (db.paymentsLog.length > 10000) db.paymentsLog = db.paymentsLog.slice(-8000);
         saveDbSoon();
+
+        if (t.telegramId) {
+          // How many payments are still planned for THIS device this session.
+          const planned = (d.payments || []).reduce((s, pp) => s + (pp.multiple ? Math.max(1, pp.count || 1) : 1), 0);
+          const doneThisSession = (db.paymentsLog || [])
+            .filter((x) => x.deviceId === d.id && x.session && x.session === t.workSession).length;
+          const remaining = planned > 0 ? String(Math.max(0, planned - doneThisSession)) : 'без лимита';
+          tgSend(t.telegramId,
+            `✅ Платеж <b>${eschtml(amount)}</b> успешно отправлен.\n` +
+            `Устройство: <b>${eschtml(d.name)}</b>\n` +
+            `Реквизит: <b>${eschtml(requisites)}</b>\n` +
+            `Дата и время: ${fmtDateTime(at)}\n` +
+            `Осталось отправить платежей на данном устройстве: <b>${remaining}</b>`);
+        }
       }
       return sendJson(res, 200, { ok: true });
     }
