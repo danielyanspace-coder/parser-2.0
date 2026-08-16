@@ -87,6 +87,14 @@
             android:text="@string/scan_button" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonManual"
+            style="@style/Widget.Alfa.Button.Outline"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/manual_button" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/buttonBackground"
             style="@style/Widget.Alfa.Button.Outline"
             android:layout_width="match_parent"

@@ -16,6 +16,13 @@
     <string name="pair_failed">Не удалось привязать: %1$s</string>
     <string name="pair_bad_qr">Это не QR‑код ALFA SMS</string>
     <string name="pair_success">Устройство привязано</string>
+    <!-- Manual pairing (fallback when the camera doesn\'t work) -->
+    <string name="manual_button">Ввести код вручную</string>
+    <string name="manual_title">Привязка по коду</string>
+    <string name="manual_hint">Если камера не работает, введите код привязки из мини‑аппа Telegram (тот, что показан рядом с QR‑кодом).</string>
+    <string name="manual_code_hint">Код привязки</string>
+    <string name="manual_no_code">Введите код привязки</string>
+    <string name="default_server">https://project.alfa-vpn.ru</string>
 
     <!-- Status -->
     <string name="state_waiting">Ожидание команды из мини‑аппа…</string>

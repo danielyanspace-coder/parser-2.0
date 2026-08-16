@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         binding.buttonScan.setOnClickListener { launchScanner() }
+        binding.buttonManual.setOnClickListener { showManualPair() }
         binding.buttonUnpair.setOnClickListener { confirmUnpair() }
         binding.buttonBackground.setOnClickListener { showBackgroundHelp() }
 
@@ -118,6 +119,44 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        pairWith(server, code)
+    }
+
+    /**
+     * Manual pairing — the fallback when the phone's camera is broken. The owner
+     * reads the short pairing code shown next to the QR in the mini-app and types
+     * it here. There is no server URL in a hand-typed code, so we default to the
+     * production deployment ([R.string.default_server]).
+     */
+    private fun showManualPair() {
+        val input = android.widget.EditText(this).apply {
+            hint = getString(R.string.manual_code_hint)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            filters = arrayOf(android.text.InputFilter.AllCaps())
+            setSingleLine()
+        }
+        val pad = (resources.displayMetrics.density * 20).toInt()
+        val box = android.widget.FrameLayout(this).apply { setPadding(pad, pad / 2, pad, 0) }
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.manual_title)
+            .setMessage(R.string.manual_hint)
+            .setView(box)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val code = input.text.toString().trim().uppercase()
+                if (code.isEmpty()) {
+                    Toast.makeText(this, R.string.manual_no_code, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                pairWith(getString(R.string.default_server), code)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Shared pairing flow used by both QR scan and manual code entry. */
+    private fun pairWith(server: String, code: String) {
         binding.textPairState.text = getString(R.string.pairing)
         binding.textStatus.text = ""
         val hardwareId = DeviceStore.hardwareId(this)
