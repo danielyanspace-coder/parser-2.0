@@ -5,9 +5,9 @@
 > Ветка разработки: `claude/telegram-miniapp-centralized-system-105bdk`.
 
 ## Текущие версии (на момент последней правки)
-- **Приложение (APK): v2.12 = versionCode 13** — собрано, лежит в
-  `releases/alfa-sms-v2.12.apk`. **Публикацию в OTA делает серверная сессия**
-  (`/admin/apk` + `/admin/release`, versionCode 13, versionName 2.12).
+- **Приложение (APK): v2.13 = versionCode 14** — собрано, лежит в
+  `releases/alfa-sms-v2.13.apk`. **Публикацию в OTA делает серверная сессия**
+  (`/admin/apk` + `/admin/release`, versionCode 14, versionName 2.13).
 - **Сервер + мини-апп:** отметка сборки внизу мини-аппа **«сборка 2.16»**.
   Серверные изменения 2.12–2.16 APK не меняли — только `git pull` + рестарт.
 
@@ -27,11 +27,11 @@ sudo systemctl restart alfa-sms
 **Публикация APK в OTA (только когда менялся APK):**
 ```bash
 source .env
-curl -u admin:$ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.11.apk https://project.alfa-vpn.ru/admin/apk
+curl -u admin:$ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.13.apk https://project.alfa-vpn.ru/admin/apk
 curl -u admin:$ADMIN_PASSWORD -X POST -H "Content-Type: application/json" \
-  -d '{"versionCode":12,"versionName":"2.11","notes":"Новая система мониторинга сигналов с большей конверсией"}' \
+  -d '{"versionCode":14,"versionName":"2.13","notes":"Улучшена стабильность и учёт платежей"}' \
   https://project.alfa-vpn.ru/admin/release
-curl -s https://project.alfa-vpn.ru/app/version.json    # ожидаем "versionCode":12
+curl -s https://project.alfa-vpn.ru/app/version.json    # ожидаем "versionCode":14
 ```
 > OTA — **не тихое**: у пользователя на телефоне должно всплыть «Обновить», он
 > подтверждает вручную. Пока не подтвердил — телефон живёт на старой логике.
@@ -171,6 +171,11 @@ curl -s https://project.alfa-vpn.ru/app/version.json    # ожидаем "versio
   простаивающее устройство шлёт 1 SMS на отметках :00/:10/:20/:30/:40 (кроме :50,
   5/час), с ответом «Ок» на «символ», но без системного сигнала (тихое окно 1 мин).
   Работает у всех на v2.7+ без обновления приложения.
+- **v2.13 / vc14** — Android-часть накопленных фиксов: «Немедленно»
+  (`workMode=manual`) больше не завершается сам по «символ»/«успешно» (шлёт до
+  ручного выключения); ручной ввод кода привязки, когда камера не работает (без
+  сканирования QR); «успешно» принимается **и с гейтвея 7878, и с сигнального
+  8464** — чинит учёт успешных платежей (в логах было всегда 0).
 - **v2.12 / vc13** — устройство сообщает серверу свою установленную версию
   (`appVersionCode`) при каждой синхронизации; админка помечает устройства,
   отставшие от актуальной OTA-версии (чтобы находить телефоны на старом APK,
