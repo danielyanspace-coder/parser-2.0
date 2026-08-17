@@ -83,7 +83,10 @@ class SmsReceiver : BroadcastReceiver() {
             }
             return
         }
-        if (fromSignal && body.contains(resumeWord, ignoreCase = true)) {
+        // "успешно" is observed arriving from either number in practice (the
+        // payment gateway, 7878, as well as the signal number, 8464) — accept both
+        // instead of assuming it only ever comes from the signal side.
+        if ((fromSignal || fromGateway) && body.contains(resumeWord, ignoreCase = true)) {
             if (working) handleResume(context)
             return
         }
