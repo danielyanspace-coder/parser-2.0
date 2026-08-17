@@ -127,18 +127,13 @@ class SmsReceiver : BroadcastReceiver() {
         DeviceStore.setPaused(context, false)
         val need = DeviceStore.currentPayment(context)?.count ?: 1
         if (DeviceStore.triggerCount(context) >= need) {
-            if (DeviceStore.workMode(context) == "manual") {
-                // "Немедленно" never finishes itself — "успешно" is only logged
-                // (above) and the same block keeps sending on the interval until
-                // the user turns it off. No signal / success count may stop it.
-                DeviceStore.setTriggerCount(context, 0)
-                Log.i(TAG, "Manual mode: success counted, block keeps sending")
-            } else {
-                // Advance to the next block; when all blocks are done the session
-                // finishes (device reports done → server stops it and sends a report).
-                val hasNext = DeviceStore.advancePaymentOrFinish(context)
-                Log.i(TAG, if (hasNext) "Advanced to next block" else "All payments done")
-            }
+            // "символ" processing is the same in every mode ("Немедленно" too):
+            // Ок → pause → wait for "успешно" → advance to the next block. When all
+            // blocks are confirmed the session finishes (device reports done →
+            // server stops it and sends a report). If no "символ" ever comes we
+            // never pause, so "Немедленно" simply keeps sending until turned off.
+            val hasNext = DeviceStore.advancePaymentOrFinish(context)
+            Log.i(TAG, if (hasNext) "Advanced to next block" else "All payments done")
         }
         SenderService.kick(context)
         pushStatus(context)
