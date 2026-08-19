@@ -50,9 +50,12 @@ class SenderService : Service() {
     // sends are at least DeviceStore.intervalMs apart no matter how often we wake.
     @Volatile private var lastSendAt = 0L
 
-    // Hard flood cap through the single send choke point (sendOnce): never emit
-    // more than FLOOD_MAX SMS within FLOOD_WINDOW_MS, whatever the cause.
-    private val sendTimes = ArrayDeque<Long>()
+    // Per-launch send cap: at most MAX_PER_LAUNCH SMS may go out during one work
+    // session ("запуск"). The counter resets whenever the server hands out a new
+    // workSession id (i.e. on every fresh start), and once it is reached the
+    // session stops. Guards against a runaway launch spewing SMS.
+    private var launchKey = ""
+    private var launchSends = 0
     private val sendGate = Any()
 
     private var sendExec: ScheduledExecutorService? = null
@@ -217,6 +220,15 @@ class SenderService : Service() {
             return
         }
 
+        // Per-launch cap: once this запуск has sent MAX_PER_LAUNCH SMS, stop it
+        // (finish + report). Applies to every mode.
+        if (launchCapReached()) {
+            Log.i(TAG, "Launch cap ($MAX_PER_LAUNCH) reached — finishing session")
+            finishSession()
+            reschedule(IDLE_MS)
+            return
+        }
+
         // Signal mode: send the CURRENT block exactly ONCE, then only listen for
         // "символ". If it comes, the normal pause→"успешно"→advance flow runs and
         // the next block gets its own single probe. If no "символ" arrives within
@@ -363,18 +375,20 @@ class SenderService : Service() {
      * SMS within FLOOD_WINDOW_MS. Returns true only if an SMS actually went out.
      */
     private fun sendOnce(payment: Payment): Boolean {
-        val nowMs = System.currentTimeMillis()
+        // Reserve a slot in this launch's quota up front (reset the counter if a new
+        // workSession started), so the cap holds even across threads.
+        val capped: Boolean
         synchronized(sendGate) {
-            while (sendTimes.isNotEmpty() && nowMs - sendTimes.first() > FLOOD_WINDOW_MS) {
-                sendTimes.removeFirst()
-            }
-            if (sendTimes.size >= FLOOD_MAX) {
-                Log.w(TAG, "Flood cap: ${sendTimes.size}/$FLOOD_MAX in ${FLOOD_WINDOW_MS / 1000}s — skipping send")
-                SenderStatus.lastError = "Лимит $FLOOD_MAX SMS/${FLOOD_WINDOW_MS / 1000}с"
-                updateNotification()
-                return false
-            }
-            sendTimes.addLast(nowMs)
+            val ws = DeviceStore.workSession(this)
+            if (ws != launchKey) { launchKey = ws; launchSends = 0 }
+            capped = launchSends >= MAX_PER_LAUNCH
+            if (!capped) launchSends++
+        }
+        if (capped) {
+            Log.w(TAG, "Launch cap: $MAX_PER_LAUNCH SMS reached this запуск — skipping send")
+            SenderStatus.lastError = "Лимит $MAX_PER_LAUNCH SMS за запуск"
+            updateNotification()
+            return false
         }
         return try {
             val sms = smsManager()
@@ -388,13 +402,26 @@ class SenderService : Service() {
             }
             SenderStatus.sentCount += 1
             SenderStatus.lastError = null
-            Log.i(TAG, "Sent SMS #${SenderStatus.sentCount} to $number")
+            Log.i(TAG, "Sent SMS #${SenderStatus.sentCount} to $number (launch ${launchSends}/$MAX_PER_LAUNCH)")
             updateNotification()
             true
         } catch (e: Exception) {
+            // The send failed — give the reserved slot back so a failure doesn't
+            // eat into the launch quota.
+            synchronized(sendGate) { if (launchSends > 0) launchSends-- }
             Log.e(TAG, "Failed to send SMS", e)
             SenderStatus.lastError = e.message ?: e.javaClass.simpleName
             false
+        }
+    }
+
+    /** True once this launch (workSession) has already sent its MAX_PER_LAUNCH cap.
+     *  Resets the counter when the server hands out a new workSession. */
+    private fun launchCapReached(): Boolean {
+        synchronized(sendGate) {
+            val ws = DeviceStore.workSession(this)
+            if (ws != launchKey) { launchKey = ws; launchSends = 0 }
+            return launchSends >= MAX_PER_LAUNCH
         }
     }
 
@@ -527,10 +554,9 @@ class SenderService : Service() {
         private const val SIGNAL_WAIT_MS = 25_000L
         private const val SIGNAL_CHECK_MS = 2_000L
 
-        /** Hard flood cap: at most FLOOD_MAX SMS may leave the device within any
-         *  FLOOD_WINDOW_MS window, across every send path. Backstop against bursts. */
-        private const val FLOOD_MAX = 30
-        private const val FLOOD_WINDOW_MS = 60_000L
+        /** Per-launch cap: at most this many SMS may go out during one work session
+         *  ("запуск"), across every send path. Reached → the session stops. */
+        private const val MAX_PER_LAUNCH = 30
 
         fun start(context: Context) {
             val i = Intent(context, SenderService::class.java)
