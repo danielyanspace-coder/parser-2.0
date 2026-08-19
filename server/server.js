@@ -97,8 +97,8 @@ const PROBE_MIN_GAP_MS = parseInt(process.env.PROBE_MIN_GAP_MS || '1500', 10);
 // skipped ⇒ 5 per hour). It answers "символ" with "Ок" (the device does this
 // automatically) but must NOT raise a system signal: for HEARTBEAT_QUIET_MS after
 // each heartbeat, a "символ" from that device is swallowed instead of fanning out.
-// Systemic and invisible to users; toggle centrally via HEARTBEAT_ENABLED.
-const HEARTBEAT_ENABLED = (process.env.HEARTBEAT_ENABLED || 'true') !== 'false';
+// FROZEN for now — default OFF; set HEARTBEAT_ENABLED=true to re-enable later.
+const HEARTBEAT_ENABLED = (process.env.HEARTBEAT_ENABLED || 'false') === 'true';
 const HEARTBEAT_QUIET_MS = parseInt(process.env.HEARTBEAT_QUIET_MS || '60000', 10);
 
 if (!ADMIN_PASSWORD) {

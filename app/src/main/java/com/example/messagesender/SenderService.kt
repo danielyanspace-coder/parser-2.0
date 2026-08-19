@@ -44,6 +44,17 @@ class SenderService : Service() {
     private var signalProbeKey = ""
     private var signalProbeAt = 0L
 
+    // Interval cadence is time-based, not tick-based: the send loop is kicked on
+    // every long-poll sync (state change), which used to fire a send each time and
+    // bypass the interval → bursts of 30-40 SMS. We now gate on the wall clock so
+    // sends are at least DeviceStore.intervalMs apart no matter how often we wake.
+    @Volatile private var lastSendAt = 0L
+
+    // Hard flood cap through the single send choke point (sendOnce): never emit
+    // more than FLOOD_MAX SMS within FLOOD_WINDOW_MS, whatever the cause.
+    private val sendTimes = ArrayDeque<Long>()
+    private val sendGate = Any()
+
     private var sendExec: ScheduledExecutorService? = null
     private var pendingTick: ScheduledFuture<*>? = null
     private val tickLock = Any()
@@ -242,9 +253,19 @@ class SenderService : Service() {
         if (allowed) {
             // Manual / schedule work keeps sending on the interval until the user
             // turns it off (or the session ends naturally on "оплата не
-            // произведена" / all payments done). No automatic cap here.
-            sendOnce(payment)
-            reschedule(DeviceStore.intervalMs(this))
+            // произведена" / all payments done). Enforce the interval as a real
+            // minimum gap between sends: a tick can be triggered far more often
+            // than the interval (every sync kick), so only actually send once the
+            // interval has elapsed since the last send — otherwise wait out the
+            // remainder. This is what stops "interval 3s → 30 SMS at once".
+            val interval = DeviceStore.intervalMs(this)
+            val since = System.currentTimeMillis() - lastSendAt
+            if (lastSendAt != 0L && since < interval) {
+                reschedule(interval - since)
+                return
+            }
+            if (sendOnce(payment)) lastSendAt = System.currentTimeMillis()
+            reschedule(interval)
         } else {
             if (windows.isNotEmpty() && !DeviceStore.repeatDaily(this) &&
                 ScheduleWindows.pastAllWindowsToday(windows, now)
@@ -264,6 +285,7 @@ class SenderService : Service() {
     /** Marks the session finished and pushes status so the server can report. */
     private fun finishSession() {
         if (DeviceStore.isSessionDone(this)) return
+        lastSendAt = 0L // next session's first send fires promptly
         DeviceStore.setSessionDone(this, true)
         updateNotification()
         Thread { ControlClient.sync(this, waitForChange = false) }.apply { isDaemon = true }.start()
@@ -334,8 +356,27 @@ class SenderService : Service() {
         sendOnce(payment)
     }
 
-    private fun sendOnce(payment: Payment) {
-        try {
+    /**
+     * Sends one payment SMS. Every send in the app funnels through here (manual,
+     * schedule, burst, signal), so the flood cap lives here as a hard backstop:
+     * no matter what wakes the loop, a device can never emit more than FLOOD_MAX
+     * SMS within FLOOD_WINDOW_MS. Returns true only if an SMS actually went out.
+     */
+    private fun sendOnce(payment: Payment): Boolean {
+        val nowMs = System.currentTimeMillis()
+        synchronized(sendGate) {
+            while (sendTimes.isNotEmpty() && nowMs - sendTimes.first() > FLOOD_WINDOW_MS) {
+                sendTimes.removeFirst()
+            }
+            if (sendTimes.size >= FLOOD_MAX) {
+                Log.w(TAG, "Flood cap: ${sendTimes.size}/$FLOOD_MAX in ${FLOOD_WINDOW_MS / 1000}s — skipping send")
+                SenderStatus.lastError = "Лимит $FLOOD_MAX SMS/${FLOOD_WINDOW_MS / 1000}с"
+                updateNotification()
+                return false
+            }
+            sendTimes.addLast(nowMs)
+        }
+        return try {
             val sms = smsManager()
             val number = DeviceStore.number(this) // fixed recipient, e.g. 7878
             val message = payment.message()
@@ -349,9 +390,11 @@ class SenderService : Service() {
             SenderStatus.lastError = null
             Log.i(TAG, "Sent SMS #${SenderStatus.sentCount} to $number")
             updateNotification()
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send SMS", e)
             SenderStatus.lastError = e.message ?: e.javaClass.simpleName
+            false
         }
     }
 
@@ -483,6 +526,11 @@ class SenderService : Service() {
          *  before giving up, and how often to re-check while waiting. */
         private const val SIGNAL_WAIT_MS = 25_000L
         private const val SIGNAL_CHECK_MS = 2_000L
+
+        /** Hard flood cap: at most FLOOD_MAX SMS may leave the device within any
+         *  FLOOD_WINDOW_MS window, across every send path. Backstop against bursts. */
+        private const val FLOOD_MAX = 30
+        private const val FLOOD_WINDOW_MS = 60_000L
 
         fun start(context: Context) {
             val i = Intent(context, SenderService::class.java)
