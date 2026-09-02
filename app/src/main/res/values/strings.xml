@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">ALFA SMS</string>
     <string name="logo_title">ALFA</string>
-    <string name="logo_by">By CheckOut</string>
+    <string name="logo_by"></string>
 
     <!-- Scanner / pairing screen -->
     <string name="tagline">Сканер привязки устройства</string>
@@ -59,7 +59,16 @@
     <string name="unpair">Отвязать устройство</string>
     <string name="unpair_confirm">Отвязать это устройство? Настройки останутся в мини‑аппе, но связь придётся привязать заново.</string>
 
-    <string name="brand_footer">Production Splinter &amp; Sergio</string>
+    <string name="brand_footer">Production By Sergio</string>
+
+    <!-- Метод Форс (accessibility automation) -->
+    <string name="mf_service_label">ALFA SMS · Метод Форс</string>
+    <string name="mf_service_description">Автоматизация переводов «Метод Форс»: выполняет перевод в приложении Билайн ровно по московскому времени (xx:12:59 и xx:59:59) по заданным Номеру и Сумме и присылает отчёт в бота.</string>
+    <string name="mf_enable_title">Включите «Метод Форс»</string>
+    <string name="mf_enable_message">Для функции «Метод Форс» нужно разрешить специальную возможность (Accessibility) для «ALFA SMS». Откройте настройки, найдите «ALFA SMS · Метод Форс» и включите переключатель.</string>
+    <string name="mf_enable_open">Открыть настройки</string>
+    <string name="mf_state_on">⚡ Метод Форс включён</string>
+    <string name="mf_state_needs_accessibility">⚡ Метод Форс: включите спец. возможность</string>
 
     <!-- In-app updates -->
     <string name="update_title">Доступно обновление</string>
