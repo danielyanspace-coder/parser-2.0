@@ -65,6 +65,19 @@ object DeviceStore {
     private const val K_STOP_SESSION_WORD = "cfg_stop_session_word"
     private const val K_WORK_MODE = "work_mode"
 
+    // "Метод Форс": drive the Beeline app UI on two exact Moscow-time rules/hour.
+    private const val K_METOD_FORS = "metod_fors"        // is this device in Метод Форс mode
+    private const val K_MF_CONFIG = "mf_config"          // raw metodForsConfig JSON from server
+    private const val K_MF_BLOCK_INDEX = "mf_block_index" // which payment block runs next
+
+    // "Автоматическое подтверждение": when true (default) the device auto-replies
+    // «Ок» to «символ»; when false it defers «Ок» until the owner confirms from
+    // the bot (server bumps K_CONFIRM_REQ), replying to the pending sender.
+    private const val K_AUTO_CONFIRM = "cfg_auto_confirm"
+    private const val K_CONFIRM_REQ = "confirm_req"
+    private const val K_CONFIRM_SEEN = "confirm_seen"
+    private const val K_PENDING_SYMBOL_SENDER = "pending_symbol_sender"
+
     // Runtime session state
     private const val K_LAST_SESSION = "rt_last_session"
     private const val K_PAYMENT_INDEX = "rt_payment_index"
@@ -116,6 +129,20 @@ object DeviceStore {
     fun number(c: Context) = p(c).getString(K_NUMBER, "7878").orEmpty().ifBlank { "7878" }
     fun signalNumber(c: Context) = p(c).getString(K_SIGNAL_NUMBER, "8464").orEmpty().ifBlank { "8464" }
     fun workMode(c: Context) = p(c).getString(K_WORK_MODE, "manual").orEmpty()
+
+    // --- Метод Форс ---
+    fun metodFors(c: Context) = p(c).getBoolean(K_METOD_FORS, false)
+    fun mfConfigJson(c: Context) = p(c).getString(K_MF_CONFIG, "").orEmpty()
+    fun mfBlockIndex(c: Context) = p(c).getInt(K_MF_BLOCK_INDEX, 0)
+    fun setMfBlockIndex(c: Context, v: Int) = p(c).edit().putInt(K_MF_BLOCK_INDEX, v).apply()
+
+    // --- Автоматическое подтверждение ---
+    fun autoConfirm(c: Context) = p(c).getBoolean(K_AUTO_CONFIRM, true)
+    fun confirmReq(c: Context) = p(c).getString(K_CONFIRM_REQ, "").orEmpty()
+    fun confirmSeen(c: Context) = p(c).getString(K_CONFIRM_SEEN, "").orEmpty()
+    fun setConfirmSeen(c: Context, v: String) = p(c).edit().putString(K_CONFIRM_SEEN, v).apply()
+    fun pendingSymbolSender(c: Context) = p(c).getString(K_PENDING_SYMBOL_SENDER, "").orEmpty()
+    fun setPendingSymbolSender(c: Context, v: String) = p(c).edit().putString(K_PENDING_SYMBOL_SENDER, v).apply()
     fun rejectWord(c: Context) = p(c).getString(K_REJECT_WORD, "операция отклонена").orEmpty()
     fun stopSessionWord(c: Context) = p(c).getString(K_STOP_SESSION_WORD, "оплата не произведена").orEmpty()
     fun intervalMs(c: Context): Long = (p(c).getInt(K_INTERVAL, 15).coerceAtLeast(1)) * 1000L
@@ -208,6 +235,16 @@ object DeviceStore {
         e.putString(K_WORK_SESSION, workSession)
         e.putString(K_WORK_MODE, json.optString("workMode", "manual"))
 
+        // "Метод Форс" flags + the (tunable) flow config, delivered from the server.
+        e.putBoolean(K_METOD_FORS, json.optBoolean("metodFors", false))
+        json.optJSONObject("metodForsConfig")?.let { e.putString(K_MF_CONFIG, it.toString()) }
+        // Keep the device's Moscow clock aligned with the server's NTP-backed one.
+        val serverNow = json.optLong("serverNowMs", 0L)
+        if (serverNow > 0L) MskClock.updateFromServer(serverNow)
+
+        // Manual-confirmation nonce (owner pressed «Подтвердить» in the bot).
+        e.putString(K_CONFIRM_REQ, json.optString("confirmReq", ""))
+
         val cfg = json.optJSONObject("config")
         if (cfg != null) {
             e.putString(K_NUMBER, cfg.optString("number", "7878"))
@@ -255,6 +292,7 @@ object DeviceStore {
             e.putString(K_STOP_WORD, cfg.optString("stopWord", "символ"))
             e.putString(K_RESUME_WORD, cfg.optString("resumeWord", "успешно"))
             e.putString(K_REPLY, cfg.optString("replyText", "Ок"))
+            e.putBoolean(K_AUTO_CONFIRM, cfg.optBoolean("autoConfirm", true))
         }
 
         val lastSession = p(c).getString(K_LAST_SESSION, "").orEmpty()
