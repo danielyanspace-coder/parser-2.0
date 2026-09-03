@@ -46,7 +46,7 @@ data class MetodForsConfig(
             hourlyBurstEnabled = true,
             hourlyBurstFireSec = 3595,  // xx:59:55
             hourlyBurstCount = 5,
-            hourlyBurstIntervalMs = 1,
+            hourlyBurstIntervalMs = 1000,
         )
 
         fun from(context: Context): MetodForsConfig {
