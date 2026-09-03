@@ -296,7 +296,7 @@ class MetodForsService : AccessibilityService() {
      */
     private fun pressSend(cfg: MetodForsConfig, attempts: Int = 4): Boolean {
         for (a in 1..attempts) {
-            val node = findTextAnywhere(cfg.sendLabel) ?: waitForText(cfg.sendLabel, 6000) ?: return false
+            val node = findTappable(cfg.sendLabel) ?: waitForTappable(cfg.sendLabel, 6000) ?: return false
             clickNode(node)
             Log.i(TAG, "Отправить tap #$a at msk=${MskClock.mskHms()}")
             val end = System.currentTimeMillis() + 4000
@@ -364,6 +364,54 @@ class MetodForsService : AccessibilityService() {
         return null
     }
 
+    /** True if the node or one of its close ancestors is clickable. */
+    private fun isClickableChain(node: AccessibilityNodeInfo): Boolean {
+        var n: AccessibilityNodeInfo? = node
+        var depth = 0
+        while (n != null && depth++ < 6) { if (n.isClickable) return true; n = n.parent }
+        return false
+    }
+
+    private fun collectMatches(root: AccessibilityNodeInfo, label: String, out: ArrayList<AccessibilityNodeInfo>) {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var guard = 0
+        while (queue.isNotEmpty() && guard++ < 4000) {
+            val n = queue.removeFirst()
+            val t = (n.text?.toString() ?: "") + "\n" + (n.contentDescription?.toString() ?: "")
+            if (n.isVisibleToUser && t.contains(label, ignoreCase = true)) out.add(n)
+            for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
+        }
+    }
+
+    /**
+     * Finds the BEST node to TAP for [label] — crucial when a word appears both
+     * on a button and inside a longer disclaimer ("Нажимая «Отправить» …"). Ranks:
+     * clickable first, then exact-text match, then the shortest text (closest to
+     * the label). So the real «Отправить» button wins over the agreement text.
+     */
+    private fun findTappable(label: String): AccessibilityNodeInfo? {
+        val matches = ArrayList<AccessibilityNodeInfo>()
+        for (r in allRoots()) collectMatches(r, label, matches)
+        if (matches.isEmpty()) return null
+        return matches.minByOrNull { n ->
+            val text = (n.text?.toString() ?: n.contentDescription?.toString() ?: "").trim()
+            val clickable = if (isClickableChain(n)) 0 else 1
+            val exact = if (text.equals(label, ignoreCase = true)) 0 else 1
+            clickable * 10000 + exact * 1000 + text.length.coerceAtMost(999)
+        }
+    }
+
+    private fun waitForTappable(label: String, timeoutMs: Long): AccessibilityNodeInfo? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (running && System.currentTimeMillis() < deadline) {
+            val n = findTappable(label)
+            if (n != null) return n
+            sleep(300)
+        }
+        return null
+    }
+
     private fun waitForText(text: String, timeoutMs: Long): AccessibilityNodeInfo? {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (running && System.currentTimeMillis() < deadline) {
@@ -375,7 +423,7 @@ class MetodForsService : AccessibilityService() {
     }
 
     private fun tapText(text: String, timeoutMs: Long): Boolean {
-        val node = waitForText(text, timeoutMs) ?: return false
+        val node = waitForTappable(text, timeoutMs) ?: return false
         return clickNode(node)
     }
 
