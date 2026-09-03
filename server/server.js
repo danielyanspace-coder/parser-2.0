@@ -65,7 +65,7 @@ function metodForsConfig() {
     beelinePackage: MF_BEELINE_PACKAGE,
     // The exact screen sequence, by on-screen label. Tunable without an APK rebuild.
     steps: [
-      'Сервисы', 'Перевести деньги', 'Перевод на карту зарубеж',
+      'Сервисы', 'Перевести деньги', 'Перевод на карту за рубеж',
       'Таджикистан', 'По номеру карты', 'Мой номер',
     ],
     cardFieldHint: 'Введите номер карты',

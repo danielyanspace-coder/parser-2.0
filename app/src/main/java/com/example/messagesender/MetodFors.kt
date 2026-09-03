@@ -27,7 +27,7 @@ data class MetodForsConfig(
     companion object {
         fun defaults() = MetodForsConfig(
             beelinePackage = "ru.beeline.services",
-            steps = listOf("Сервисы", "Перевести деньги", "Перевод на карту зарубеж",
+            steps = listOf("Сервисы", "Перевести деньги", "Перевод на карту за рубеж",
                 "Таджикистан", "По номеру карты", "Мой номер"),
             cardFieldHint = "Введите номер карты",
             continueLabel = "Продолжить",
