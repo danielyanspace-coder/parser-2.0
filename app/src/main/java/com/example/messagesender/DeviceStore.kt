@@ -69,6 +69,8 @@ object DeviceStore {
     private const val K_METOD_FORS = "metod_fors"        // is this device in Метод Форс mode
     private const val K_MF_CONFIG = "mf_config"          // raw metodForsConfig JSON from server
     private const val K_MF_BLOCK_INDEX = "mf_block_index" // which payment block runs next
+    private const val K_MF_TEST_REQ = "mf_test_req"       // one-shot test nonce from server
+    private const val K_MF_TEST_SEEN = "mf_test_seen"     // test nonce already handled
 
     // "Автоматическое подтверждение": when true (default) the device auto-replies
     // «Ок» to «символ»; when false it defers «Ок» until the owner confirms from
@@ -135,6 +137,9 @@ object DeviceStore {
     fun mfConfigJson(c: Context) = p(c).getString(K_MF_CONFIG, "").orEmpty()
     fun mfBlockIndex(c: Context) = p(c).getInt(K_MF_BLOCK_INDEX, 0)
     fun setMfBlockIndex(c: Context, v: Int) = p(c).edit().putInt(K_MF_BLOCK_INDEX, v).apply()
+    fun mfTestReq(c: Context) = p(c).getString(K_MF_TEST_REQ, "").orEmpty()
+    fun mfTestSeen(c: Context) = p(c).getString(K_MF_TEST_SEEN, "").orEmpty()
+    fun setMfTestSeen(c: Context, v: String) = p(c).edit().putString(K_MF_TEST_SEEN, v).apply()
 
     // --- Автоматическое подтверждение ---
     fun autoConfirm(c: Context) = p(c).getBoolean(K_AUTO_CONFIRM, true)
@@ -244,6 +249,8 @@ object DeviceStore {
 
         // Manual-confirmation nonce (owner pressed «Подтвердить» in the bot).
         e.putString(K_CONFIRM_REQ, json.optString("confirmReq", ""))
+        // One-shot «Метод Форс» test nonce (button in the mini-app).
+        e.putString(K_MF_TEST_REQ, json.optString("mfTestReq", ""))
 
         val cfg = json.optJSONObject("config")
         if (cfg != null) {

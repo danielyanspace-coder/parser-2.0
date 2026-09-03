@@ -1,6 +1,9 @@
 package com.example.messagesender
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -74,8 +77,25 @@ class MetodForsService : AccessibilityService() {
 
     private fun schedulerTick() {
         if (!running || busy) return
-        if (!eligible()) return
+        if (!DeviceStore.isPaired(this) || !DeviceStore.metodFors(this)) return
         val cfg = MetodForsConfig.from(this)
+
+        // On-demand test (button in the mini-app): dry-run the whole prep and
+        // report what the screen shows, without pressing «Отправить». Lets us
+        // debug the Beeline flow without waiting for xx:12:59 / xx:59:59.
+        if (checkTestRequested()) {
+            busy = true
+            worker?.execute {
+                try {
+                    if (!MskClock.hasServerTime()) MskClock.syncHttp(DeviceStore.serverUrl(this))
+                    runTest(cfg)
+                } catch (e: Exception) { Log.e(TAG, "test error", e) }
+                finally { busy = false }
+            }
+            return
+        }
+
+        if (!eligible()) return
         val nowTrue = MskClock.trueEpoch()
 
         // For each rule, the prep window is [fireEpoch - prepLead, fireEpoch).
@@ -106,6 +126,26 @@ class MetodForsService : AccessibilityService() {
     private fun eligible(): Boolean =
         DeviceStore.isPaired(this) && DeviceStore.metodFors(this) &&
             DeviceStore.active(this) && DeviceStore.tokenValid(this) && DeviceStore.hasWork(this)
+
+    /** True once when the mini-app requested a one-shot test (nonce changed). */
+    private fun checkTestRequested(): Boolean {
+        val req = DeviceStore.mfTestReq(this)
+        if (req.isBlank() || req == DeviceStore.mfTestSeen(this)) return false
+        DeviceStore.setMfTestSeen(this, req)
+        return true
+    }
+
+    /** Dry-run the whole prep and report diagnostics — never presses «Отправить». */
+    private fun runTest(cfg: MetodForsConfig) {
+        reportDebug("🔬 Метод Форс: тест начат. Открываю приложение (${cfg.beelinePackage})…")
+        val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
+        if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма — заполните платёж в мини-аппе."); return }
+        if (prepareTransfer(cfg, pay)) {
+            reportDebug("✅ Тест OK: дошёл до кнопки «${cfg.sendLabel}» и НЕ нажимаю её (это тест). " +
+                "Значит чтение экрана и нажатия работают — можно ждать боевого времени.")
+        }
+        // On failure, prepareTransfer already reported where it stopped and what it saw.
+    }
 
     // --- One rule run ---
 
@@ -160,15 +200,28 @@ class MetodForsService : AccessibilityService() {
      * Продолжить → [amount field]=Сумма → Продолжить → wait «Отправить».
      */
     private fun prepareTransfer(cfg: MetodForsConfig, pay: Payment): Boolean {
-        if (!launchPackage(cfg.beelinePackage)) { Log.w(TAG, "cannot launch ${cfg.beelinePackage}"); return false }
-        sleep(2500) // let the app come to the foreground
+        if (!launchPackage(cfg.beelinePackage)) {
+            Log.w(TAG, "cannot launch ${cfg.beelinePackage}")
+            reportDebug("Не удалось открыть приложение ${cfg.beelinePackage} (нет пакета?).")
+            return false
+        }
+        sleep(3500) // let the app come to the foreground and render
 
-        for (step in cfg.steps) {
-            if (!tapText(step, STEP_TIMEOUT)) { Log.w(TAG, "step not found: $step"); return false }
+        for ((i, step) in cfg.steps.withIndex()) {
+            if (!tapText(step, STEP_TIMEOUT)) {
+                val seen = dumpVisibleTexts()
+                Log.w(TAG, "step not found: $step; screen shows: $seen")
+                reportDebug("Метод Форс: не нашёл «$step» (шаг ${i + 1}). Что вижу на экране: " +
+                    if (seen.isBlank()) "(пусто — не могу прочитать интерфейс)" else seen)
+                return false
+            }
             sleep(STEP_PAUSE)
         }
         // Card number field → Номер → Продолжить.
-        if (!fillField(cfg.cardFieldHint, pay.requisites)) { Log.w(TAG, "card field not filled"); return false }
+        if (!fillField(cfg.cardFieldHint, pay.requisites)) {
+            reportDebug("Метод Форс: не нашёл поле «${cfg.cardFieldHint}». Вижу: " + dumpVisibleTexts())
+            return false
+        }
         sleep(STEP_PAUSE)
         if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) { Log.w(TAG, "Продолжить (1) not found"); return false }
         sleep(STEP_PAUSE)
@@ -215,11 +268,8 @@ class MetodForsService : AccessibilityService() {
     private fun waitOutcome(cfg: MetodForsConfig, timeoutMs: Long): Outcome {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val root = rootInActiveWindow
-            if (root != null) {
-                if (nodeWithText(root, cfg.backToFinanceLabel) != null) return Outcome.BACK_TO_FINANCE
-                if (nodeWithText(root, cfg.repeatLabel) != null) return Outcome.REPEAT
-            }
+            if (findTextAnywhere(cfg.backToFinanceLabel) != null) return Outcome.BACK_TO_FINANCE
+            if (findTextAnywhere(cfg.repeatLabel) != null) return Outcome.REPEAT
             sleep(300)
         }
         return Outcome.NONE
@@ -236,6 +286,14 @@ class MetodForsService : AccessibilityService() {
         } catch (e: Exception) { Log.e(TAG, "launch error", e); false }
     }
 
+    /** All window roots we can read (active window + every other interactive window). */
+    private fun allRoots(): List<AccessibilityNodeInfo> {
+        val roots = ArrayList<AccessibilityNodeInfo>()
+        try { rootInActiveWindow?.let { roots.add(it) } } catch (e: Exception) {}
+        try { for (w in windows) w.root?.let { r -> if (roots.none { it == r }) roots.add(r) } } catch (e: Exception) {}
+        return roots
+    }
+
     /** Finds a visible node whose text/description contains [text] (case-insensitive). */
     private fun nodeWithText(root: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
         root ?: return null
@@ -248,10 +306,16 @@ class MetodForsService : AccessibilityService() {
         }
     }
 
+    /** Search [text] across every readable window, not just the active one. */
+    private fun findTextAnywhere(text: String): AccessibilityNodeInfo? {
+        for (r in allRoots()) { val n = nodeWithText(r, text); if (n != null) return n }
+        return null
+    }
+
     private fun waitForText(text: String, timeoutMs: Long): AccessibilityNodeInfo? {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val n = nodeWithText(rootInActiveWindow, text)
+            val n = findTextAnywhere(text)
             if (n != null) return n
             sleep(250)
         }
@@ -263,13 +327,63 @@ class MetodForsService : AccessibilityService() {
         return clickNode(node)
     }
 
+    /**
+     * Taps a node. First tries the semantic ACTION_CLICK on a clickable ancestor;
+     * if that isn't available or fails, dispatches a REAL touch gesture at the
+     * node's on-screen centre. The gesture path is what makes it work on banking
+     * apps whose buttons are custom-drawn and not marked clickable in the tree.
+     */
     private fun clickNode(node: AccessibilityNodeInfo): Boolean {
         var n: AccessibilityNodeInfo? = node
-        while (n != null) {
-            if (n.isClickable) return n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        var depth = 0
+        while (n != null && depth++ < 6) {
+            if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
             n = n.parent
         }
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (rect.width() > 0 && rect.height() > 0) {
+            return tapAt(rect.exactCenterX(), rect.exactCenterY())
+        }
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    /** Dispatches a real one-finger tap at (x, y) in screen coordinates. */
+    private fun tapAt(x: Float, y: Float): Boolean {
+        return try {
+            val path = Path().apply { moveTo(x, y) }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+                .build()
+            dispatchGesture(gesture, null, null)
+        } catch (e: Exception) { Log.e(TAG, "tapAt failed", e); false }
+    }
+
+    /** Collects every visible text / content-description on screen (for diagnostics). */
+    private fun dumpVisibleTexts(): String {
+        val out = LinkedHashSet<String>()
+        for (r in allRoots()) collectTexts(r, out)
+        return out.joinToString(" | ").take(700)
+    }
+
+    private fun collectTexts(root: AccessibilityNodeInfo, out: LinkedHashSet<String>) {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var guard = 0
+        while (queue.isNotEmpty() && guard++ < 4000) {
+            val n = queue.removeFirst()
+            if (n.isVisibleToUser) {
+                n.text?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
+                n.contentDescription?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
+        }
+    }
+
+    /** Sends a diagnostic line to the bot so we can see what the screen shows. */
+    private fun reportDebug(msg: String) {
+        val appCtx = applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "mf_debug", msg) }.apply { isDaemon = true }.start()
     }
 
     /**

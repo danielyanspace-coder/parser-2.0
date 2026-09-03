@@ -295,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.20';
+const BUILD='2.21';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -1030,6 +1030,20 @@ function renderDevice(c){
     el('div',{class:'grow'},el('b',{},'Активно / неактивно'),
       el('div',{class:'small muted'},d.paired?(d.online?'На связи':'Оффлайн'):'Не привязано')),
     swWrap(asw))));
+
+  // Метод Форс: on-demand test — the phone dry-runs the Beeline flow now and
+  // reports what it sees to the bot (does NOT press «Отправить»).
+  if(STATE.metodForsEnabled){
+    const tb=el('button',{class:'btn sec',style:'margin-bottom:6px',textContent:'🔬 Проверить Метод Форс (тест)',disabled:!d.paired});
+    tb.onclick=async()=>{
+      tb.disabled=true;tb.textContent='Запуск теста…';
+      const {code}=await api('POST',`/api/mini/device/${d.id}/mftest`,{});
+      tb.disabled=false;tb.textContent='🔬 Проверить Метод Форс (тест)';
+      if(code===200)toast('Тест запущен — смотрите отчёт в боте');else toast('Ошибка');
+    };
+    c.append(tb);
+    c.append(el('div',{class:'tiny muted',style:'margin:0 2px 12px'},'Телефон откроет Билайн, пройдёт по шагам и пришлёт в бота, что видит на экране. Кнопку «Отправить» НЕ нажимает.'));
+  }
 
   if(!d.paired) c.append(pairingBlock(d));
 

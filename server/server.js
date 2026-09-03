@@ -547,6 +547,9 @@ function buildSyncPayload(d, t) {
     // this nonce changes → the device sends the deferred «Ок» to the pending
     // «символ» sender.
     confirmReq: d.confirmReq || '',
+    // One-shot «Метод Форс» test: when this nonce changes the device dry-runs the
+    // Beeline flow and reports what it sees (without pressing «Отправить»).
+    mfTestReq: d.mfTestReq || '',
     config: {
       // «Автоматическое подтверждение» — default ON (auto «Ок»); OFF ⇒ manual.
       autoConfirm: !(t && t.autoConfirm === false),
@@ -1491,6 +1494,14 @@ const server = http.createServer(async (req, res) => {
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
+        // One-shot «Метод Форс» test: the device dry-runs the Beeline flow now and
+        // reports what it sees to the bot (without pressing «Отправить»).
+        if (m === 'POST' && action === 'mftest') {
+          d.mfTestReq = uuid();
+          bumpDevice(d);
+          saveDb();
+          return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
+        }
         return sendJson(res, 405, { error: 'method_not_allowed' });
       }
       return sendJson(res, 404, { error: 'not_found' });
@@ -1556,6 +1567,19 @@ const server = http.createServer(async (req, res) => {
           `чтобы отправить «Ок» с устройства.`;
         const kb = [[{ text: '✅ Подтвердить', callback_data: `cf:${d.id}` }]];
         for (const chatId of recips) tgSend(chatId, msg, kb);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // «Метод Форс» diagnostic: the device reports what it sees on the Beeline
+      // screen (or where it got stuck) — relayed to the owner + employees so the
+      // flow can be tuned without a rebuild.
+      if (body.type === 'mf_debug' && t) {
+        const line = String(body.requisites || '').slice(0, 1000);
+        const recips = [];
+        if (t.telegramId) recips.push(t.telegramId);
+        for (const emp of (t.employees || [])) if (emp && emp.telegramId) recips.push(emp.telegramId);
+        const msg = `🛠 <b>Метод Форс · диагностика</b>\nУстройство: <b>${eschtml(d.name)}</b>\n${eschtml(line)}`;
+        for (const chatId of recips) tgSend(chatId, msg);
         return sendJson(res, 200, { ok: true });
       }
 
