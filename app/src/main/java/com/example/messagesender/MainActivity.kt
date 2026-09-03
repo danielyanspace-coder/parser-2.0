@@ -289,9 +289,47 @@ class MainActivity : AppCompatActivity() {
 
         binding.textPairState.text = getString(R.string.paired_as, DeviceStore.name(this))
         binding.textStatus.text = buildStatusLine()
+
+        // "Метод Форс" needs the accessibility service turned on. Ask once when the
+        // server has put this device into Метод Форс mode but it isn't running yet.
+        if (DeviceStore.metodFors(this) && !isMetodForsAccessibilityOn() && !mfPrompted) {
+            mfPrompted = true
+            promptAccessibility()
+        }
+    }
+
+    private var mfPrompted = false
+
+    private fun isMetodForsAccessibilityOn(): Boolean {
+        if (MetodForsService.isRunning()) return true
+        return try {
+            val enabled = Settings.Secure.getString(
+                contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            enabled.split(':').any { it.contains(packageName) && it.contains("MetodForsService") }
+        } catch (e: Exception) { false }
+    }
+
+    private fun promptAccessibility() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.mf_enable_title)
+            .setMessage(R.string.mf_enable_message)
+            .setPositiveButton(R.string.mf_enable_open) { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (e: Exception) { /* nothing more we can do */ }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun buildStatusLine(): String {
+        if (DeviceStore.metodFors(this)) {
+            val mf = if (isMetodForsAccessibilityOn()) getString(R.string.mf_state_on)
+                     else getString(R.string.mf_state_needs_accessibility)
+            val net = if (SenderStatus.offline) "\n" + getString(R.string.state_offline) else ""
+            return mf + net
+        }
         val base = when {
             !DeviceStore.tokenValid(this) -> getString(R.string.state_token_invalid)
             SenderStatus.offline -> getString(R.string.state_offline)

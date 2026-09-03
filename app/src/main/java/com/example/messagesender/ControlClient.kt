@@ -110,6 +110,24 @@ object ControlClient {
         }
     }
 
+    /** Reports one completed "Метод Форс" transfer (rule "A" = xx:12:59, "B" = xx:59:59). */
+    fun reportMetodFors(c: Context, requisites: String, amount: String, rule: String) {
+        val server = DeviceStore.serverUrl(c)
+        val id = DeviceStore.deviceId(c)
+        val secret = DeviceStore.secret(c)
+        if (server.isBlank() || id.isBlank() || secret.isBlank()) return
+        try {
+            val body = JSONObject()
+                .put("deviceId", id).put("secret", secret)
+                .put("type", "metodfors").put("requisites", requisites)
+                .put("amount", amount).put("rule", rule)
+                .toString()
+            post(server.trimEnd('/') + "/api/device/event", body, 15000)
+        } catch (e: Exception) {
+            Log.w(TAG, "reportMetodFors error: ${e.message}")
+        }
+    }
+
     private data class Resp(val code: Int, val body: String?)
 
     // The connection currently blocked in a long-poll, so a watchdog / the UI

@@ -151,6 +151,31 @@
   .dtval{font-size:24px;font-weight:800}
   .dtlbl{font-size:12px;color:var(--muted);margin-top:2px}
 
+  /* ---- «Метод Форс» dark-graphite cabinet ---- */
+  /* Entry button on the (light) home — always graphite so it reads as "other". */
+  .btn.nav.mf-entry{background:linear-gradient(135deg,#2b2f36,#3a4049);color:#f0f2f5;border-color:#454c56}
+  .btn.nav.mf-entry .arw{color:#aab2bd}
+  /* When the cabinet is open, repaint the whole shell in graphite by swapping the
+     theme tokens on the wrapper — every card / input / badge inherits it. */
+  .wrap.mf{
+    --bg:#1b1e24; --card:#242932; --card2:#2b313b; --input-bg:#1c2027; --btn-sec:#2f353f;
+    --ink:#eceff3; --muted:#9aa4b0; --line:#353d48;
+    --accent:#9aa7bb; --accent2:#7f8aa0; --accent-ink:#fff;
+    --shadow:0 1px 3px rgba(0,0,0,.5),0 1px 2px rgba(0,0,0,.4);
+    --shadow-lg:0 10px 30px rgba(0,0,0,.55);
+    background:var(--bg);
+  }
+  .wrap.mf .btn:not(.sec):not(.ghost):not(.danger):not(.nav){
+    background:linear-gradient(135deg,#3a4049,#4a525d);color:#f2f4f7}
+  .wrap.mf .hero{background:linear-gradient(135deg,#2b2f36,#3f4650)}
+  .mfhead{display:flex;align-items:center;gap:14px;margin:8px 2px 16px}
+  .mfmark{width:52px;height:52px;border-radius:15px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    font-size:26px;background:linear-gradient(135deg,#3a4049,#20242b);box-shadow:inset 0 0 0 1px #4a525d,0 6px 18px rgba(0,0,0,.45)}
+  .mftitle{font-size:24px;font-weight:800;letter-spacing:.02em;
+    background:linear-gradient(90deg,#e8ecf2,#aab4c2);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .mfsub{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .wrap.mf .mfinfo{border-left:4px solid #6f7889}
+
   /* ============ Mobile bottom nav (Telegram mini-app) ============ */
   .wrap.hasnav{padding-bottom:82px}
   .bottomnav{display:none}
@@ -220,7 +245,7 @@
   <aside class="sidebar" id="sidebar"></aside>
   <div id="content"></div>
   <div class="foot">
-    <div class="prod">Production by <b>Splinter&nbsp;&amp;&nbsp;Sergio</b></div>
+    <div class="prod">Production By <b>Sergio</b></div>
     <div class="support" id="supportBtn">🛟 Тех&nbsp;поддержка</div>
   </div>
   <nav class="bottomnav" id="bottomnav"></nav>
@@ -270,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.18';
+const BUILD='2.20';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -298,6 +323,9 @@ async function api(method,path,body){
 
 // --- App state + router ---
 let STATE=null, IS_ADMIN=false, ADMIN_DATA=null, ADMIN_PAY=null, ADMIN_SIGNALS=null, ADMIN_STOPS=null;
+// True while browsing the "Метод Форс" cabinet (its screen and the device /
+// payment sub-screens opened from it) — drives the dark-graphite skin.
+let MF_MODE=false;
 let view={name:'home',params:{}};
 const stack=[];
 
@@ -308,7 +336,7 @@ function syncBackButton(){ if(!TG||!TG.BackButton)return; if(stack.length){TG.Ba
 if(TG&&TG.BackButton)TG.BackButton.onClick(()=>back());
 
 function logo(){
-  const wm=el('div',{class:'wm'},el('div',{class:'a'},'ALFA'),el('div',{class:'by'},'By CheckOut'));
+  const wm=el('div',{class:'wm'},el('div',{class:'a'},'ALFA'));
   return el('div',{class:'logo'},wm);
 }
 
@@ -347,7 +375,7 @@ function updateShell(){
   if(!authed){ appbar.innerHTML=''; side.innerHTML=''; return; }
   // top bar
   appbar.innerHTML='';
-  const brand=el('div',{class:'dbrand',onclick:()=>reset('home')},el('span',{class:'da'},'ALFA'),el('span',{class:'dby'},'By CheckOut'));
+  const brand=el('div',{class:'dbrand',onclick:()=>reset('home')},el('span',{class:'da'},'ALFA'));
   const themeB=el('button',{class:'dicon',title:'Тема',textContent:(THEME==='dark'?'☀️':'🌙'),onclick:()=>document.getElementById('themeBtn').click()});
   const outB=el('button',{class:'dbtn',textContent:'Выйти',onclick:async()=>{await api('POST','/api/web/logout');STATE=null;reset('weblogin');}});
   appbar.append(brand, el('div',{class:'dctrls'}, themeB, outB));
@@ -407,6 +435,10 @@ function updateBottomNav(){
 
 function render(){
   const c=$('#content'); c.innerHTML='';
+  // Leaving the Метод Форс cabinet (any screen that isn't it or its sub-screens)
+  // drops the dark skin. renderMetodFors re-arms it.
+  if(view.name==='home'||view.name==='schedule'||view.name==='employees'||view.name==='wiki'||view.name==='admin'||view.name==='token'||view.name==='weblogin') MF_MODE=false;
+  document.querySelector('.wrap').classList.toggle('mf', MF_MODE);
   updateShell();
   updateBottomNav();
   const v=view.name;
@@ -414,6 +446,7 @@ function render(){
   if(ACT_AS && v!=='admin') c.append(actingBanner());
   if(v==='token') return renderToken(c);
   if(v==='home') return renderHome(c);
+  if(v==='metodfors') return renderMetodFors(c);
   if(v==='schedule') return renderSchedule(c);
   if(v==='employees') return renderEmployees(c);
   if(v==='wiki') return renderWiki(c);
@@ -512,8 +545,7 @@ function dashboardBlocks(s){
   const out=[];
   out.push(el('div',{class:'card',style:'margin-bottom:12px'},el('div',{class:'row between'},
     el('div',{},el('b',{},d.working?'🟢 В работе':'⚪ Остановлено'),
-      d.working?el('div',{class:'small muted',style:'margin-top:2px'},'Режим: '+modeLbl):null),
-    d.signalEnabled?el('span',{class:'badge run'},'📡 сигнал вкл'):null)));
+      d.working?el('div',{class:'small muted',style:'margin-top:2px'},'Режим: '+modeLbl):null))));
 
   const tile=(label,val)=>el('div',{class:'dtile'},el('div',{class:'dtval'},String(val)),el('div',{class:'dtlbl'},label));
   out.push(el('div',{class:'dtiles'},
@@ -535,6 +567,24 @@ function dashboardBlocks(s){
       el('div',{class:'tiny muted'},`${d.today.count} шт.`)))));
   return out;
 }
+// «Автоматическое подтверждение» toggle — shared by home and Метод Форс.
+// ON (default): device auto-replies «Ок» to «символ». OFF: the owner confirms
+// each payment from the bot («Подтвердите платеж на устройстве X»).
+function autoConfirmCard(s){
+  const on = s.autoConfirm !== false;
+  const acs=el('input',{type:'checkbox',checked:on,disabled:!s.valid});
+  acs.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/autoconfirm',{on:acs.checked});
+    if(code===200){STATE=data.state;render();toast(acs.checked?'Автоподтверждение включено':'Автоподтверждение выключено');}
+    else{toast('Ошибка');acs.checked=!acs.checked;}
+  };
+  return el('div',{class:'card'},el('div',{class:'row between'},
+    el('div',{class:'grow'},
+      el('b',{},'✅ Автоматическое подтверждение'),
+      el('div',{class:'small muted',style:'margin-top:4px'},'Включено — устройство само отвечает «Ок» на «символ». Выключите, чтобы подтверждать каждый платёж вручную: при «символ» вместо «Ок» придёт запрос в бота «Подтвердите платеж на устройстве …».')),
+    swWrap(acs)));
+}
+
 function renderHome(c){
   const s=STATE;
   c.append(logo());
@@ -572,19 +622,16 @@ function renderHome(c){
         }}))));
   }
 
-  // signal-driven work
-  const sigsw=el('input',{type:'checkbox',checked:!!s.signalEnabled,disabled:!s.valid});
-  sigsw.onchange=async()=>{
-    const {code,data}=await api('POST','/api/mini/signal',{on:sigsw.checked});
-    if(code===200){STATE=data.state;render();toast(sigsw.checked?'Сигнал включён':'Сигнал выключен');}
-    else{toast('Ошибка');sigsw.checked=!sigsw.checked;}
-  };
-  c.append(el('div',{class:'card'},el('div',{class:'row between'},
-    el('div',{class:'grow'},
-      el('b',{},'📡 Отработать по сигналу'),
-      el('div',{class:'small muted',style:'margin-top:4px'},'Наша система стоит на мониторинге метода. Если ползунок включён, при сигнале все ваши активные устройства и настроенные реквизиты отработают и пришлют отчёт.'),
-      el('div',{class:'tiny',style:'margin-top:6px;color:var(--muted);opacity:.75'},'Система в бета-версии — ползунок можно оставить, но советуем настраивать расписание и не рассчитывать только на сигнал.')),
-    swWrap(sigsw))));
+  // "Метод Форс" — a separate cabinet, shown only for tokens the admin granted
+  // the feature to (STATE.metodForsEnabled). Отдельный тёмный экран.
+  if(s.metodForsEnabled){
+    const mf=el('button',{class:'btn nav mf-entry',style:'margin-bottom:10px',onclick:()=>go('metodfors')},
+      el('span',{},'⚡ Метод Форс'),el('span',{class:'arw'},'›'));
+    c.append(mf);
+  }
+
+  // automatic confirmation toggle
+  c.append(autoConfirmCard(s));
 
   // interval settings + add device
   c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:()=>go('schedule')},
@@ -641,6 +688,91 @@ function renderHome(c){
       else if(d.online)badges.append(el('span',{class:'badge run'},'📶 На связи'));
       const sw=swWrap(asw);
       // Tapping the switch must NOT open the device screen.
+      sw.onclick=(e)=>e.stopPropagation();
+      sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
+      const row=el('div',{class:'devrow'},
+        el('div',{class:'grow'},el('div',{class:'nm ellipsis'},d.name),badges),
+        sw,el('span',{class:'arw muted',textContent:'›'}));
+      row.onclick=()=>go('device',{id:d.id});
+      list.append(row);
+    });
+    c.append(list);
+  }
+}
+
+// ---------- Метод Форс (separate dark cabinet, token-gated) ----------
+// Same building blocks as home (dashboard, employees, devices with requisites +
+// amount) but WITHOUT «Отработать по сигналу» and «Настройка интервалов». Work
+// runs automatically on two exact Moscow-time rules per hour (xx:12:59 / xx:59:59),
+// executed by each device independently — no manual start toggle here.
+function renderMetodFors(c){
+  MF_MODE=true;
+  document.querySelector('.wrap').classList.add('mf');
+  const s=STATE;
+  if(!s || !s.metodForsEnabled){ reset('home'); return; }
+
+  c.append(el('div',{class:'mfhead'},
+    el('div',{class:'mfmark'},'⚡'),
+    el('div',{},el('div',{class:'mftitle'},'Метод Форс'),
+      el('div',{class:'mfsub'},'Автоматическая отработка по московскому времени'))));
+
+  if(s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
+
+  c.append(el('div',{class:'card mfinfo'},
+    el('b',{},'🕒 Как работает'),
+    el('div',{class:'small muted',style:'margin-top:6px'},
+      'Каждое устройство отрабатывает самостоятельно по двум правилам (время по МСК, сверяется с эталонными часами): ровно в xx:12:59 и в xx:59:59 каждого часа. Система готовит всё заранее и выполняет перевод в приложении Билайн по заданным Номеру и Сумме. Отчёт по каждому отработавшему устройству приходит в бота.')));
+
+  // automatic confirmation toggle
+  c.append(autoConfirmCard(s));
+
+  // employees — owner only
+  if(s.isOwner){
+    c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:async()=>{
+      const {code,data}=await api('GET','/api/mini/state');
+      if(code===200&&!data.needToken){STATE=data.state;}
+      go('employees');
+    }},
+      el('span',{},'👥 Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:'')),el('span',{class:'arw'},'›')));
+  }
+
+  const canAdd=s.canAddDevice;
+  const addBtn=el('button',{class:'btn',textContent:'＋ Добавить устройство',disabled:!canAdd,style:'margin-bottom:12px'});
+  addBtn.onclick=addDeviceFlow;
+  c.append(addBtn);
+  if(!canAdd&&s.valid) c.append(el('div',{class:'tiny muted center',style:'margin:-6px 0 12px'},
+    s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств — обратитесь к администратору.':'Добавление недоступно.'));
+
+  if(s.valid && s.devices.length){
+    const bulk=async(on)=>{
+      const {code,data}=await api('POST','/api/mini/devices/active',{active:on});
+      if(code===200){STATE=data.state;render();toast(on?'Все устройства в работе':'Все устройства сняты с работы');}
+      else toast('Ошибка');
+    };
+    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},
+      el('button',{class:'btn sec small',style:'flex:1',textContent:'✅ Поставить все в работу',onclick:()=>bulk(true)}),
+      el('button',{class:'btn sec small',style:'flex:1',textContent:'⛔ Снять все с работы',onclick:()=>bulk(false)})));
+  }
+
+  c.append(el('div',{class:'row between',style:'margin:2px 2px 6px'},
+    el('div',{class:'small muted'},`Устройства ${s.deviceCount} / ${s.deviceLimit}`)));
+
+  if(s.devices.length===0){
+    c.append(el('div',{class:'card center muted small'},'Устройств пока нет.'));
+  }else{
+    const list=el('div',{class:'card'});
+    s.devices.forEach(d=>{
+      const asw=el('input',{type:'checkbox',checked:!!d.active});
+      asw.onclick=(e)=>e.stopPropagation();
+      asw.onchange=async()=>{
+        const {code,data}=await api('POST',`/api/mini/device/${d.id}/active`,{active:asw.checked});
+        if(code===200){STATE=data.state;render();}else{toast('Ошибка');asw.checked=!asw.checked;}
+      };
+      const badges=el('div',{class:'row',style:'gap:6px;margin-top:3px'});
+      badges.append(d.active?el('span',{class:'badge on'},el('i',{class:'dot'}),'Активно'):el('span',{class:'badge off'},el('i',{class:'dot'}),'Неактивно'));
+      if(!d.paired)badges.append(el('span',{class:'badge off'},'Не привязано'));
+      else if(d.online)badges.append(el('span',{class:'badge run'},'📶 На связи'));
+      const sw=swWrap(asw);
       sw.onclick=(e)=>e.stopPropagation();
       sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
       const row=el('div',{class:'devrow'},
@@ -821,16 +953,6 @@ const WIKI_SECTIONS=[
        'Устройства со статусом «Неактивно» (белый ползунок) в запуске не участвуют.',
        'Задержки нет: сервер будит устройства в момент нажатия.',
        'Чтобы остановить, просто выключите тумблер.',
-     ],c),
-   ]},
-  {icon:'📡',color:'#e8622c',title:'«Отработать по сигналу»',
-   sub:'Автоматический запуск по сигналу, без вашего участия.',
-   body:(c)=>[
-     wikiP('Наша система мониторинга сама ловит сигнал и определяет окно. Как только сигнал пришёл, все ваши устройства со статусом «Активно» начинают отработку. Когда окно закрывается, система сама останавливается и присылает отчёт в Telegram-бота отдельным сообщением.'),
-     wikiList([
-       'Достаточно один раз включить ползунок «Отработать по сигналу», дальше всё происходит автоматически.',
-       'В работу идут только активные устройства с настроенными реквизитами.',
-       'Это дополнительный «страховочный» режим, его удобно держать включённым вместе с расписанием.',
      ],c),
    ]},
   {icon:'⏱',color:'#6a5cff',title:'«Настройка интервалов»',
@@ -1176,6 +1298,7 @@ function adminTokenCard(t){
     quota,el('button',{class:'btn sec small',textContent:'Устр.',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/quota`,{deviceLimit:parseInt(quota.value,10)||0});if(code===200){await loadAdmin();render();toast('Лимит обновлён');}}}),
     extend,el('button',{class:'btn sec small',textContent:'Дней',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/extend`,{days:parseInt(extend.value,10)||0});if(code===200){await loadAdmin();render();toast('Срок обновлён');}}}),
     el('button',{class:'btn sec small',textContent:t.enabled?'Выключить':'Включить',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/toggle`,{});if(code===200){await loadAdmin();render();}}}),
+    el('button',{class:'btn sec small',style:t.metodForsEnabled?'background:#3a4049;color:#f0f2f5;border-color:#4a525d':'',textContent:t.metodForsEnabled?'⚡ Метод Форс: вкл':'⚡ Метод Форс: выкл',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/metodfors`,{enabled:!t.metodForsEnabled});if(code===200){await loadAdmin();render();toast(t.metodForsEnabled?'Метод Форс выключен':'Метод Форс включён');}else toast('Ошибка');}}),
     t.telegramId?el('button',{class:'btn sec small',textContent:'Отвязать TG',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/unbind`,{});if(code===200){await loadAdmin();render();toast('Отвязано');}}}):null,
     el('button',{class:'btn danger small',textContent:'Удалить',onclick:()=>confirmAction(`Удалить токен «${t.comment||t.value}» и все его устройства?`,async()=>{const {code}=await api('DELETE',`/api/admin/token/${t.id}`);if(code===200){await loadAdmin();render();toast('Удалено');}})})
   ].filter(Boolean).forEach(n=>act.append(n));

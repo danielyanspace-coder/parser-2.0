@@ -119,6 +119,9 @@ class SenderService : Service() {
                         // Probe pool: the server asked this device to send one
                         // detection SMS (nonce changed).
                         maybeSendProbe()
+                        // Manual confirmation: the owner pressed «Подтвердить» in the
+                        // bot (nonce changed) → send the deferred «Ок».
+                        maybeSendConfirm()
                     }
                     ControlClient.SyncResult.UNAUTHORIZED -> {
                         // A single 403 can be transient (deploy blip, proxy, brief
@@ -366,6 +369,27 @@ class SenderService : Service() {
         val payment = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() } ?: return
         Log.i(TAG, "Probe: sending one detection SMS")
         sendOnce(payment)
+    }
+
+    /**
+     * Manual confirmation ("Автоматическое подтверждение" off): the owner pressed
+     * «Подтвердить» in the bot, so the server bumped the confirm nonce. Send the
+     * deferred «Ок» to the pending «символ» sender. In Метод Форс mode this also
+     * releases the automation engine (it was waiting on the «символ» handshake).
+     */
+    private fun maybeSendConfirm() {
+        val req = DeviceStore.confirmReq(this)
+        if (req.isBlank() || req == DeviceStore.confirmSeen(this)) return
+        DeviceStore.setConfirmSeen(this, req) // one confirmation per nonce
+        val dest = DeviceStore.pendingSymbolSender(this).ifBlank { DeviceStore.signalNumber(this) }
+        try {
+            smsManager().sendTextMessage(dest, null, DeviceStore.replyText(this), null, null)
+            Log.i(TAG, "Manual confirmation: sent «Ок» to $dest")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send confirmation «Ок»", e)
+        }
+        if (DeviceStore.metodFors(this)) MetodFors.onSymbol()
+        scheduleTick(0)
     }
 
     /**

