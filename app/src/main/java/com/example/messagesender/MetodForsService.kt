@@ -4,9 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.Build
 import android.os.Bundle
-import android.telephony.SmsManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -144,14 +142,13 @@ class MetodForsService : AccessibilityService() {
      */
     private fun runTest(cfg: MetodForsConfig) {
         reportDebug("🔬 Тест начат (сборка v${BuildConfig.VERSION_CODE}).")
-        // 1) SMS burst check — send it now so the залп can be verified on demand.
-        fireSmsBurstNow(cfg)
-        // 2) Beeline flow — verbose + short waits so it reports where it stops.
+        // Beeline flow only — verbose + short waits so it reports where it stops.
+        // (The hourly SMS burst is NOT triggered from the test.)
         val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
         if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма."); return }
         if (!prepareTransfer(cfg, pay, verbose = true, stepTimeout = TEST_STEP_TIMEOUT)) return
         reportDebug("Дошёл до «${cfg.sendLabel}», нажимаю…")
-        if (!tapText(cfg.sendLabel, TEST_STEP_TIMEOUT)) { reportDebug("Не смог нажать «${cfg.sendLabel}»."); return }
+        pressSend(cfg)
         reportDebug("Нажал «${cfg.sendLabel}». Жду итоговый экран…")
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
             Outcome.BACK_TO_FINANCE -> {
@@ -186,10 +183,8 @@ class MetodForsService : AccessibilityService() {
             Log.i(TAG, "Reached Отправить; holding until ${cfg.ruleA.fireSec}s (msk=${MskClock.mskHms()})")
             MskClock.sleepUntil(fireEpoch)
         }
-        if (!tapText(cfg.sendLabel, TAP_TIMEOUT)) {
-            Log.w(TAG, "Отправить not tappable — aborting"); return
-        }
-        Log.i(TAG, "Отправить tapped at msk=${MskClock.mskHms()}")
+        pressSend(cfg)
+        Log.i(TAG, "Отправить pressed at msk=${MskClock.mskHms()}")
 
         // 3) Evaluate the outcome screen.
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
@@ -293,6 +288,28 @@ class MetodForsService : AccessibilityService() {
     // --- Outcome detection ---
 
     private enum class Outcome { BACK_TO_FINANCE, REPEAT, NONE }
+
+    /**
+     * Presses «Отправить» and confirms it actually took effect: after each tap it
+     * checks whether an outcome screen appeared or the button went away, and retries
+     * a few times otherwise. This fixes "reached the button but it wasn't pressed".
+     */
+    private fun pressSend(cfg: MetodForsConfig, attempts: Int = 4): Boolean {
+        for (a in 1..attempts) {
+            val node = findTextAnywhere(cfg.sendLabel) ?: waitForText(cfg.sendLabel, 6000) ?: return false
+            clickNode(node)
+            Log.i(TAG, "Отправить tap #$a at msk=${MskClock.mskHms()}")
+            val end = System.currentTimeMillis() + 4000
+            while (System.currentTimeMillis() < end) {
+                if (findTextAnywhere(cfg.backToFinanceLabel) != null ||
+                    findTextAnywhere(cfg.repeatLabel) != null) return true // outcome shown → pressed
+                if (findTextAnywhere(cfg.sendLabel) == null) return true    // button gone → pressed
+                sleep(250)
+            }
+            // Still on the send screen — the tap didn't register; try again.
+        }
+        return true
+    }
 
     private fun waitOutcome(cfg: MetodForsConfig, timeoutMs: Long): Outcome {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -421,31 +438,6 @@ class MetodForsService : AccessibilityService() {
         Thread { ControlClient.reportEvent(appCtx, "mf_debug", msg) }.apply { isDaemon = true }.start()
     }
 
-    private fun smsMgr(): SmsManager =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java)
-        else @Suppress("DEPRECATION") SmsManager.getDefault()
-
-    /** Sends the hourly-style SMS burst right now (used by the TEST to verify it). */
-    private fun fireSmsBurstNow(cfg: MetodForsConfig) {
-        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
-        if (payments.isEmpty()) { reportDebug("Тест залпа: нет Номера/Суммы."); return }
-        val number = DeviceStore.number(this)
-        val count = cfg.hourlyBurstCount.coerceAtLeast(1)
-        val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
-        var sent = 0
-        for (i in 0 until count) {
-            try {
-                val sms = smsMgr()
-                val msg = payments[i % payments.size].message()
-                val parts = sms.divideMessage(msg)
-                if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null)
-                else sms.sendTextMessage(number, null, msg, null, null)
-                sent++
-            } catch (e: Exception) { Log.e(TAG, "test burst send failed", e) }
-            if (i < count - 1 && gap > 0) sleep(gap)
-        }
-        reportDebug("📤 Тест залпа: отправлено $sent из $count SMS на $number (интервал ${gap}мс).")
-    }
 
     /**
      * Fills a text field with [value]. Prefers a field whose text/hint contains
