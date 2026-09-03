@@ -393,27 +393,35 @@ class SenderService : Service() {
         val count = cfg.hourlyBurstCount.coerceAtLeast(1)
         val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
         Log.i(TAG, "Метод Форс burst: $count SMS at msk=${MskClock.mskHms()}")
+        var sent = 0
         for (i in 0 until count) {
             if (stopping) break
-            sendRawPaymentSms(payments[i % payments.size].message())
+            if (sendRawPaymentSms(payments[i % payments.size].message())) sent++
             if (i < count - 1 && gap > 0) sleep(gap)
         }
         updateNotification()
+        // Confirm the burst to the bot (one line per hour, per active device).
+        val appCtx = applicationContext
+        val at = MskClock.mskHms()
+        Thread { ControlClient.reportEvent(appCtx, "mf_debug", "📤 Почасовой залп: отправлено $sent из $count SMS в $at (МСК).") }
+            .apply { isDaemon = true }.start()
     }
 
     /** Sends one payment SMS to the fixed number, bypassing the per-launch cap
      *  (the hourly burst is a fixed small count and not tied to a work session). */
-    private fun sendRawPaymentSms(message: String) {
-        try {
+    private fun sendRawPaymentSms(message: String): Boolean {
+        return try {
             val sms = smsManager()
             val number = DeviceStore.number(this)
             val parts = sms.divideMessage(message)
             if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null)
             else sms.sendTextMessage(number, null, message, null, null)
             SenderStatus.sentCount += 1
+            true
         } catch (e: Exception) {
             Log.e(TAG, "mf burst send failed", e)
             SenderStatus.lastError = e.message ?: e.javaClass.simpleName
+            false
         }
     }
 

