@@ -5,9 +5,12 @@
 > Ветка разработки: `claude/telegram-miniapp-centralized-system-105bdk`.
 
 ## Текущие версии (на момент последней правки)
-- **Приложение (APK): v2.16 = versionCode 17** — собрано, лежит в
-  `releases/alfa-sms-v2.16.apk`. **Публикацию в OTA делает серверная сессия**
-  (`/admin/apk` + `/admin/release`, versionCode 17, versionName 2.16).
+- **Приложение (APK): v2.17 = versionCode 18** — собрано, лежит в
+  `releases/alfa-sms-v2.17.apk`. Добавлены **«Метод Форс»** (подтверждение через
+  Accessibility Service) и **автоподтверждение «Ок»**. Публикация в OTA —
+  `/admin/apk` + `/admin/release` (versionCode 18, versionName 2.17).
+- **Приложение (APK): v2.16 = versionCode 17** — предыдущая сборка,
+  `releases/alfa-sms-v2.16.apk`.
 - **Сервер + мини-апп:** отметка сборки внизу мини-аппа **«сборка 2.18»**.
   Серверные изменения 2.12–2.18 APK не меняли — только `git pull` + рестарт.
 
@@ -27,11 +30,11 @@ sudo systemctl restart alfa-sms
 **Публикация APK в OTA (только когда менялся APK):**
 ```bash
 source .env
-curl -u admin:$ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.16.apk https://project.alfa-vpn.ru/admin/apk
+curl -u admin:$ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.17.apk https://project.alfa-vpn.ru/admin/apk
 curl -u admin:$ADMIN_PASSWORD -X POST -H "Content-Type: application/json" \
-  -d '{"versionCode":17,"versionName":"2.16","notes":"Улучшена стабильность и учёт платежей"}' \
+  -d '{"versionCode":18,"versionName":"2.17","notes":"Метод Форс + автоподтверждение Ок"}' \
   https://project.alfa-vpn.ru/admin/release
-curl -s https://project.alfa-vpn.ru/app/version.json    # ожидаем "versionCode":17
+curl -s https://project.alfa-vpn.ru/app/version.json    # ожидаем "versionCode":18
 ```
 > OTA — **не тихое**: у пользователя на телефоне должно всплыть «Обновить», он
 > подтверждает вручную. Пока не подтвердил — телефон живёт на старой логике.

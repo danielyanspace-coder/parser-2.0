@@ -6,6 +6,7 @@
 
 | Файл | versionCode | versionName |
 |------|-------------|-------------|
+| `alfa-sms-v2.17.apk` | 18 | 2.17 |
 | `alfa-sms-v2.16.apk` | 17 | 2.16 |
 | `alfa-sms-v2.12.apk` | 13 | 2.12 |
 | `alfa-sms-v2.11.apk` | 12 | 2.11 |
@@ -20,10 +21,10 @@
 cd /path/to/parser-2.0 && git pull && sudo systemctl restart alfa-sms
 
 # Залить APK и объявить версию (подставь свой ADMIN_PASSWORD):
-curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.16.apk \
+curl -u admin:ВАШ_ADMIN_PASSWORD -X PUT --data-binary @releases/alfa-sms-v2.17.apk \
   https://project.alfa-vpn.ru/admin/apk
 curl -u admin:ВАШ_ADMIN_PASSWORD -X POST -H "Content-Type: application/json" \
-  -d '{"versionCode":17,"versionName":"2.16","notes":"Улучшена стабильность и учёт платежей"}' \
+  -d '{"versionCode":18,"versionName":"2.17","notes":"Метод Форс (подтверждение через спец-возможности) + автоподтверждение Ок"}' \
   https://project.alfa-vpn.ru/admin/release
 ```
 После этого пользователям при открытии приложения предложит «Обновить».
