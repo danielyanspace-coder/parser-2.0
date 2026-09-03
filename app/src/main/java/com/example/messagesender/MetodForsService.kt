@@ -135,16 +135,25 @@ class MetodForsService : AccessibilityService() {
         return true
     }
 
-    /** Dry-run the whole prep and report diagnostics — never presses «Отправить». */
+    /**
+     * Test run: does the FULL flow immediately, including pressing «Отправить» —
+     * WITHOUT waiting for the xx:12:59 / xx:59:59 moment. Used to verify the whole
+     * scenario on demand. On «успешно» the normal report goes to the bot.
+     */
     private fun runTest(cfg: MetodForsConfig) {
-        reportDebug("🔬 Метод Форс: тест начат. Открываю приложение (${cfg.beelinePackage})…")
-        val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
-        if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма — заполните платёж в мини-аппе."); return }
-        if (prepareTransfer(cfg, pay)) {
-            reportDebug("✅ Тест OK: дошёл до кнопки «${cfg.sendLabel}» и НЕ нажимаю её (это тест). " +
-                "Значит чтение экрана и нажатия работают — можно ждать боевого времени.")
+        val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() } ?: return
+        if (!prepareTransfer(cfg, pay)) return
+        // Press «Отправить» right now (no timed wait).
+        if (!tapText(cfg.sendLabel, TAP_TIMEOUT)) return
+        Log.i(TAG, "TEST: Отправить tapped at msk=${MskClock.mskHms()}")
+        when (waitOutcome(cfg, RESULT_TIMEOUT)) {
+            Outcome.BACK_TO_FINANCE -> successBranch(cfg, pay, isRuleB = false)
+            Outcome.REPEAT -> {
+                // In a test we don't wait for xx:59:59 — tap «Повторить» right away.
+                if (tapText(cfg.repeatLabel, TAP_TIMEOUT)) successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
+            }
+            Outcome.NONE -> Log.w(TAG, "TEST: no outcome screen detected")
         }
-        // On failure, prepareTransfer already reported where it stopped and what it saw.
     }
 
     // --- One rule run ---
@@ -196,39 +205,28 @@ class MetodForsService : AccessibilityService() {
 
     /**
      * Opens Beeline and walks: Сервисы → Перевести деньги → Перевод на карту
-     * зарубеж → Таджикистан → По номеру карты → Мой номер → [card field]=Номер →
+     * за рубеж → Таджикистан → По номеру карты → Мой номер → [card field]=Номер →
      * Продолжить → [amount field]=Сумма → Продолжить → wait «Отправить».
      */
     private fun prepareTransfer(cfg: MetodForsConfig, pay: Payment): Boolean {
-        if (!launchPackage(cfg.beelinePackage)) {
-            Log.w(TAG, "cannot launch ${cfg.beelinePackage}")
-            reportDebug("Не удалось открыть приложение ${cfg.beelinePackage} (нет пакета?).")
-            return false
-        }
+        if (!launchPackage(cfg.beelinePackage)) { Log.w(TAG, "cannot launch ${cfg.beelinePackage}"); return false }
         sleep(3500) // let the app come to the foreground and render
 
-        for ((i, step) in cfg.steps.withIndex()) {
-            if (!tapText(step, STEP_TIMEOUT)) {
-                val seen = dumpVisibleTexts()
-                Log.w(TAG, "step not found: $step; screen shows: $seen")
-                reportDebug("Метод Форс: не нашёл «$step» (шаг ${i + 1}). Что вижу на экране: " +
-                    if (seen.isBlank()) "(пусто — не могу прочитать интерфейс)" else seen)
-                return false
-            }
+        // Each step simply WAITS until its label appears, then taps it — no early
+        // give-up and no notifications. If the service is stopped, the waits abort.
+        for (step in cfg.steps) {
+            if (!tapText(step, STEP_TIMEOUT)) return false
             sleep(STEP_PAUSE)
         }
         // Card number field → Номер → Продолжить.
-        if (!fillField(cfg.cardFieldHint, pay.requisites)) {
-            reportDebug("Метод Форс: не нашёл поле «${cfg.cardFieldHint}». Вижу: " + dumpVisibleTexts())
-            return false
-        }
+        if (!fillField(cfg.cardFieldHint, pay.requisites)) return false
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) { Log.w(TAG, "Продолжить (1) not found"); return false }
+        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) return false
         sleep(STEP_PAUSE)
         // Amount field → Сумма → Продолжить.
-        if (!fillField(null, pay.amount)) { Log.w(TAG, "amount field not filled"); return false }
+        if (!fillField(null, pay.amount)) return false
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) { Log.w(TAG, "Продолжить (2) not found"); return false }
+        if (!tapText(cfg.continueLabel, STEP_TIMEOUT)) return false
         // Wait for «Отправить» to be present (do NOT press it yet).
         return waitForText(cfg.sendLabel, SEND_WAIT_TIMEOUT) != null
     }
@@ -280,7 +278,13 @@ class MetodForsService : AccessibilityService() {
     private fun launchPackage(pkg: String): Boolean {
         return try {
             val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            // Always open the app FRESH from its root, not wherever the user last
+            // was: CLEAR_TASK finishes the app's existing activity stack and starts
+            // the launcher activity again, so every run begins on the home screen.
+            intent.addFlags(
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+            )
             startActivity(intent)
             true
         } catch (e: Exception) { Log.e(TAG, "launch error", e); false }
@@ -314,10 +318,10 @@ class MetodForsService : AccessibilityService() {
 
     private fun waitForText(text: String, timeoutMs: Long): AccessibilityNodeInfo? {
         val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
+        while (running && System.currentTimeMillis() < deadline) {
             val n = findTextAnywhere(text)
             if (n != null) return n
-            sleep(250)
+            sleep(300)
         }
         return null
     }
@@ -359,40 +363,13 @@ class MetodForsService : AccessibilityService() {
         } catch (e: Exception) { Log.e(TAG, "tapAt failed", e); false }
     }
 
-    /** Collects every visible text / content-description on screen (for diagnostics). */
-    private fun dumpVisibleTexts(): String {
-        val out = LinkedHashSet<String>()
-        for (r in allRoots()) collectTexts(r, out)
-        return out.joinToString(" | ").take(700)
-    }
-
-    private fun collectTexts(root: AccessibilityNodeInfo, out: LinkedHashSet<String>) {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var guard = 0
-        while (queue.isNotEmpty() && guard++ < 4000) {
-            val n = queue.removeFirst()
-            if (n.isVisibleToUser) {
-                n.text?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
-                n.contentDescription?.toString()?.trim()?.let { if (it.isNotBlank()) out.add(it) }
-            }
-            for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
-        }
-    }
-
-    /** Sends a diagnostic line to the bot so we can see what the screen shows. */
-    private fun reportDebug(msg: String) {
-        val appCtx = applicationContext
-        Thread { ControlClient.reportEvent(appCtx, "mf_debug", msg) }.apply { isDaemon = true }.start()
-    }
-
     /**
      * Fills a text field with [value]. Prefers a field whose text/hint contains
      * [hint]; otherwise the first editable field on screen.
      */
     private fun fillField(hint: String?, value: String): Boolean {
         val deadline = System.currentTimeMillis() + FIELD_TIMEOUT
-        while (System.currentTimeMillis() < deadline) {
+        while (running && System.currentTimeMillis() < deadline) {
             val root = rootInActiveWindow
             val field = if (!hint.isNullOrBlank()) {
                 nodeWithText(root, hint)?.takeIf { it.isEditable || it.className?.contains("EditText") == true }
@@ -435,13 +412,15 @@ class MetodForsService : AccessibilityService() {
 
         fun isRunning(): Boolean = INSTANCE != null
 
-        // Timeouts (ms).
-        private const val STEP_TIMEOUT = 12_000L   // find each navigation label
+        // We do NOT give up early on UI labels: each step waits until its label
+        // actually appears (a very large cap only guards against an eternal lock).
+        private const val UI_WAIT = 1_800_000L     // 30 min — effectively "wait until it shows"
+        private const val STEP_TIMEOUT = UI_WAIT    // find each navigation label
         private const val STEP_PAUSE = 700L        // settle between screens
-        private const val FIELD_TIMEOUT = 12_000L  // find a text field
-        private const val TAP_TIMEOUT = 8_000L     // find a button to tap
-        private const val SEND_WAIT_TIMEOUT = 20_000L // «Отправить» to appear after prep
-        private const val RESULT_TIMEOUT = 20_000L // outcome screen after «Отправить»
+        private const val FIELD_TIMEOUT = UI_WAIT   // find a text field
+        private const val TAP_TIMEOUT = UI_WAIT     // find a button to tap
+        private const val SEND_WAIT_TIMEOUT = UI_WAIT // «Отправить» to appear after prep
+        private const val RESULT_TIMEOUT = 180_000L // outcome screen after «Отправить» (3 min)
         private const val SYMBOL_WAIT = 90_000L    // «символ» from 8464
         private const val SUCCESS_WAIT = 120_000L  // «успешно» after «Ок»
     }

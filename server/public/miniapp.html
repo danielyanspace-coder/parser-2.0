@@ -295,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.21';
+const BUILD='2.22';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -719,9 +719,7 @@ function renderMetodFors(c){
   if(s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
 
   c.append(el('div',{class:'card mfinfo'},
-    el('b',{},'🕒 Как работает'),
-    el('div',{class:'small muted',style:'margin-top:6px'},
-      'Каждое устройство отрабатывает самостоятельно по двум правилам (время по МСК, сверяется с эталонными часами): ровно в xx:12:59 и в xx:59:59 каждого часа. Система готовит всё заранее и выполняет перевод в приложении Билайн по заданным Номеру и Сумме. Отчёт по каждому отработавшему устройству приходит в бота.')));
+    el('div',{class:'small'},'📱 Приложение на устройствах должно быть включено на экране. Оно автоматически отработает платеж.')));
 
   // automatic confirmation toggle
   c.append(autoConfirmCard(s));
