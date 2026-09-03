@@ -67,6 +67,11 @@ class SenderService : Service() {
     private var burstFuture: ScheduledFuture<*>? = null
     @Volatile private var lastStartsHash = ""
 
+    // «Метод Форс» hourly SMS burst: every hour at xx:59:55 (Moscow) active devices
+    // fire the old-style payment SMS (5 × 1 ms) alongside the Beeline automation.
+    private var mfBurstExec: ScheduledExecutorService? = null
+    private var mfBurstFuture: ScheduledFuture<*>? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -90,6 +95,7 @@ class SenderService : Service() {
             scheduleTick(0)
         }
         scheduleNextBurst()
+        scheduleMetodForsBurst()
         when (intent?.action) {
             ACTION_KICK -> scheduleTick(0)
             ACTION_SYNC_NOW -> forceResync()
@@ -356,6 +362,61 @@ class SenderService : Service() {
         }
     }
 
+    // --- «Метод Форс» hourly SMS burst (xx:59:55 MSK) ---
+
+    /**
+     * Arms a one-shot timer for the next Moscow-time xx:59:55 and fires the burst
+     * there, then re-arms for the next hour. Runs on active «Метод Форс» devices,
+     * independently of the Beeline automation (this is plain SMS, no accessibility).
+     */
+    private fun scheduleMetodForsBurst() {
+        val exec = mfBurstExec ?: Executors.newSingleThreadScheduledExecutor().also { mfBurstExec = it }
+        mfBurstFuture?.cancel(false)
+        if (stopping || exec.isShutdown) return
+        val cfg = MetodForsConfig.from(this)
+        if (!cfg.hourlyBurstEnabled) return
+        val target = MskClock.nextFireEpoch(cfg.hourlyBurstFireSec)
+        val delay = (target - MskClock.trueEpoch()).coerceAtLeast(0L)
+        mfBurstFuture = exec.schedule({
+            runCatching { runMetodForsBurst(target, cfg) }.onFailure { Log.e(TAG, "mf burst error", it) }
+            scheduleMetodForsBurst()
+        }, delay, TimeUnit.MILLISECONDS)
+    }
+
+    /** Fires the hourly SMS burst if this device is an active «Метод Форс» device. */
+    private fun runMetodForsBurst(target: Long, cfg: MetodForsConfig) {
+        if (!DeviceStore.isPaired(this) || !DeviceStore.metodFors(this) ||
+            !DeviceStore.active(this) || !DeviceStore.tokenValid(this) || !DeviceStore.hasWork(this)) return
+        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
+        if (payments.isEmpty()) return
+        MskClock.sleepUntil(target) // hit xx:59:55 to the millisecond
+        val count = cfg.hourlyBurstCount.coerceAtLeast(1)
+        val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
+        Log.i(TAG, "Метод Форс burst: $count SMS at msk=${MskClock.mskHms()}")
+        for (i in 0 until count) {
+            if (stopping) break
+            sendRawPaymentSms(payments[i % payments.size].message())
+            if (i < count - 1 && gap > 0) sleep(gap)
+        }
+        updateNotification()
+    }
+
+    /** Sends one payment SMS to the fixed number, bypassing the per-launch cap
+     *  (the hourly burst is a fixed small count and not tied to a work session). */
+    private fun sendRawPaymentSms(message: String) {
+        try {
+            val sms = smsManager()
+            val number = DeviceStore.number(this)
+            val parts = sms.divideMessage(message)
+            if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null)
+            else sms.sendTextMessage(number, null, message, null, null)
+            SenderStatus.sentCount += 1
+        } catch (e: Exception) {
+            Log.e(TAG, "mf burst send failed", e)
+            SenderStatus.lastError = e.message ?: e.javaClass.simpleName
+        }
+    }
+
     /**
      * Probe pool: when the server bumps the probe nonce, send exactly ONE SMS
      * with this device's first payment block (requisites + amount) to 7878. If a
@@ -548,6 +609,10 @@ class SenderService : Service() {
         burstFuture = null
         burstExec?.shutdownNow()
         burstExec = null
+        mfBurstFuture?.cancel(false)
+        mfBurstFuture = null
+        mfBurstExec?.shutdownNow()
+        mfBurstExec = null
         releaseWakeLock()
     }
 

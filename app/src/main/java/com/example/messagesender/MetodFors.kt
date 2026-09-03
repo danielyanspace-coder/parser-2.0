@@ -23,6 +23,10 @@ data class MetodForsConfig(
     val successWord: String,
     val ruleA: MfRule,
     val ruleB: MfRule,
+    val hourlyBurstEnabled: Boolean,
+    val hourlyBurstFireSec: Int,
+    val hourlyBurstCount: Int,
+    val hourlyBurstIntervalMs: Int,
 ) {
     companion object {
         fun defaults() = MetodForsConfig(
@@ -39,6 +43,10 @@ data class MetodForsConfig(
             successWord = "успешно",
             ruleA = MfRule(779, 149),   // xx:12:59, prep from xx:10:30
             ruleB = MfRule(3599, 300),  // xx:59:59, prep from xx:54:59
+            hourlyBurstEnabled = true,
+            hourlyBurstFireSec = 3595,  // xx:59:55
+            hourlyBurstCount = 5,
+            hourlyBurstIntervalMs = 1,
         )
 
         fun from(context: Context): MetodForsConfig {
@@ -69,6 +77,10 @@ data class MetodForsConfig(
                 successWord = o.optString("successWord", d.successWord).ifBlank { d.successWord },
                 ruleA = rule("ruleA", d.ruleA),
                 ruleB = rule("ruleB", d.ruleB),
+                hourlyBurstEnabled = o.optJSONObject("hourlyBurst")?.optBoolean("enabled", d.hourlyBurstEnabled) ?: d.hourlyBurstEnabled,
+                hourlyBurstFireSec = o.optJSONObject("hourlyBurst")?.optInt("fireSec", d.hourlyBurstFireSec) ?: d.hourlyBurstFireSec,
+                hourlyBurstCount = o.optJSONObject("hourlyBurst")?.optInt("count", d.hourlyBurstCount) ?: d.hourlyBurstCount,
+                hourlyBurstIntervalMs = o.optJSONObject("hourlyBurst")?.optInt("intervalMs", d.hourlyBurstIntervalMs) ?: d.hourlyBurstIntervalMs,
             )
         }
     }
