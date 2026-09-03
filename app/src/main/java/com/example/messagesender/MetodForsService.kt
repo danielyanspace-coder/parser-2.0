@@ -148,7 +148,7 @@ class MetodForsService : AccessibilityService() {
         if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма."); return }
         if (!prepareTransfer(cfg, pay, verbose = true, stepTimeout = TEST_STEP_TIMEOUT)) return
         reportDebug("Дошёл до «${cfg.sendLabel}», нажимаю…")
-        pressSend(cfg)
+        pressSend(cfg, verbose = true)
         reportDebug("Нажал «${cfg.sendLabel}». Жду итоговый экран…")
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
             Outcome.BACK_TO_FINANCE -> {
@@ -294,21 +294,44 @@ class MetodForsService : AccessibilityService() {
      * checks whether an outcome screen appeared or the button went away, and retries
      * a few times otherwise. This fixes "reached the button but it wasn't pressed".
      */
-    private fun pressSend(cfg: MetodForsConfig, attempts: Int = 4): Boolean {
+    private fun pressSend(cfg: MetodForsConfig, verbose: Boolean = false, attempts: Int = 6): Boolean {
         for (a in 1..attempts) {
-            val node = findTappable(cfg.sendLabel) ?: waitForTappable(cfg.sendLabel, 6000) ?: return false
-            clickNode(node)
-            Log.i(TAG, "Отправить tap #$a at msk=${MskClock.mskHms()}")
-            val end = System.currentTimeMillis() + 4000
+            // Collect EVERY on-screen occurrence of «Отправить» and tap all of them
+            // (the disclaimer text does nothing; the yellow button actually fires).
+            val matches = ArrayList<AccessibilityNodeInfo>()
+            for (r in allRoots()) collectMatches(r, cfg.sendLabel, matches)
+            if (matches.isEmpty()) {
+                if (waitForTappable(cfg.sendLabel, 5000) == null) {
+                    if (verbose) reportDebug("Не вижу «${cfg.sendLabel}» на экране.")
+                    return false
+                }
+                continue
+            }
+            if (verbose && a == 1) reportDebug("Нашёл «${cfg.sendLabel}»: ${matches.size} шт — жму все (попытка $a).")
+            for (n in matches) tapNodeHard(n)
+            Log.i(TAG, "Отправить: tapped ${matches.size} node(s), attempt #$a at msk=${MskClock.mskHms()}")
+            val end = System.currentTimeMillis() + 3500
             while (System.currentTimeMillis() < end) {
                 if (findTextAnywhere(cfg.backToFinanceLabel) != null ||
                     findTextAnywhere(cfg.repeatLabel) != null) return true // outcome shown → pressed
-                if (findTextAnywhere(cfg.sendLabel) == null) return true    // button gone → pressed
                 sleep(250)
             }
-            // Still on the send screen — the tap didn't register; try again.
+            if (findTextAnywhere(cfg.sendLabel) == null) return true // screen changed → pressed
+            // Still on the send screen — retry, tapping everything again.
         }
         return true
+    }
+
+    /** Presses a node BOTH ways: semantic click on a clickable ancestor AND a real
+     *  finger-tap gesture at its centre — maximises the chance a custom button fires. */
+    private fun tapNodeHard(node: AccessibilityNodeInfo) {
+        var n: AccessibilityNodeInfo? = node
+        var depth = 0
+        while (n != null && depth++ < 6) { if (n.isClickable) { n.performAction(AccessibilityNodeInfo.ACTION_CLICK); break }; n = n.parent }
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (rect.width() > 0 && rect.height() > 0) tapAt(rect.exactCenterX(), rect.exactCenterY())
+        sleep(200)
     }
 
     private fun waitOutcome(cfg: MetodForsConfig, timeoutMs: Long): Outcome {
