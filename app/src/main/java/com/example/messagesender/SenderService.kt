@@ -68,9 +68,13 @@ class SenderService : Service() {
     @Volatile private var lastStartsHash = ""
 
     // «Метод Форс» hourly SMS burst: every hour at xx:59:55 (Moscow) active devices
-    // fire the old-style payment SMS (5 × 1 ms) alongside the Beeline automation.
+    // fire the old-style payment SMS (5 × 1s) alongside the Beeline automation.
+    // Driven by a 1-second watchdog tick (not a one-shot delayed timer) so it is
+    // immune to the device clock offset changing between "schedule" and "fire" —
+    // see [burstTick].
     private var mfBurstExec: ScheduledExecutorService? = null
     private var mfBurstFuture: ScheduledFuture<*>? = null
+    @Volatile private var lastMfBurstHourKey: String = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -95,7 +99,7 @@ class SenderService : Service() {
             scheduleTick(0)
         }
         scheduleNextBurst()
-        scheduleMetodForsBurst()
+        startMetodForsBurstWatcher()
         when (intent?.action) {
             ACTION_KICK -> scheduleTick(0)
             ACTION_SYNC_NOW -> forceResync()
@@ -365,31 +369,58 @@ class SenderService : Service() {
     // --- «Метод Форс» hourly SMS burst (xx:59:55 MSK) ---
 
     /**
-     * Arms a one-shot timer for the next Moscow-time xx:59:55 and fires the burst
-     * there, then re-arms for the next hour. Runs on active «Метод Форс» devices,
-     * independently of the Beeline automation (this is plain SMS, no accessibility).
+     * Starts the once-per-second watchdog that drives the hourly burst, if it
+     * isn't already running. Deliberately NOT a one-shot delayed timer: a timer
+     * armed with `schedule(delayMs)` bakes in the offset between the device clock
+     * and the server clock *at scheduling time*. If [MskClock] later corrects
+     * that offset (a fresh /sync or /api/time hit before the timer fires), the
+     * already-queued delay does not move with it — the timer still fires at the
+     * old, now-wrong wall-clock moment (this is exactly how a burst went out at
+     * 10:52:17 instead of xx:59:55). Checking the true corrected time every
+     * second instead means the fire decision is always made against the latest
+     * offset, so it self-corrects no matter when the clock sync lands.
      */
-    private fun scheduleMetodForsBurst() {
+    private fun startMetodForsBurstWatcher() {
+        val running = mfBurstFuture?.let { !it.isCancelled && !it.isDone } == true
+        if (running) return
         val exec = mfBurstExec ?: Executors.newSingleThreadScheduledExecutor().also { mfBurstExec = it }
-        mfBurstFuture?.cancel(false)
         if (stopping || exec.isShutdown) return
-        val cfg = MetodForsConfig.from(this)
-        if (!cfg.hourlyBurstEnabled) return
-        val target = MskClock.nextFireEpoch(cfg.hourlyBurstFireSec)
-        val delay = (target - MskClock.trueEpoch()).coerceAtLeast(0L)
-        mfBurstFuture = exec.schedule({
-            runCatching { runMetodForsBurst(target, cfg) }.onFailure { Log.e(TAG, "mf burst error", it) }
-            scheduleMetodForsBurst()
-        }, delay, TimeUnit.MILLISECONDS)
+        mfBurstFuture = exec.scheduleAtFixedRate({
+            runCatching { burstTick() }.onFailure { Log.e(TAG, "mf burst tick error", it) }
+        }, 0L, 1L, TimeUnit.SECONDS)
     }
 
-    /** Fires the hourly SMS burst if this device is an active «Метод Форс» device. */
-    private fun runMetodForsBurst(target: Long, cfg: MetodForsConfig) {
+    /**
+     * Runs every second. Fires the hourly burst at most once per Moscow hour,
+     * only inside a short window around the configured second-of-hour — wide
+     * enough that a delayed tick (GC pause, doze) can't skip it, narrow enough
+     * that a restart mid-hour can't accidentally re-fire it.
+     */
+    private fun burstTick() {
+        if (stopping) return
         if (!DeviceStore.isPaired(this) || !DeviceStore.metodFors(this) ||
             !DeviceStore.active(this) || !DeviceStore.tokenValid(this) || !DeviceStore.hasWork(this)) return
+        val cfg = MetodForsConfig.from(this)
+        if (!cfg.hourlyBurstEnabled) return
+        val fireSec = cfg.hourlyBurstFireSec
+        val cal = MskClock.mskCalendar()
+        val secOfHour = MskClock.secondOfHour(cal)
+        val hourKey = "${cal.get(Calendar.YEAR)}-${cal.get(Calendar.DAY_OF_YEAR)}-${cal.get(Calendar.HOUR_OF_DAY)}"
+        if (lastMfBurstHourKey == hourKey) return // already fired (or firing) this hour
+        if (secOfHour < fireSec - 2) return // not there yet
+        lastMfBurstHourKey = hourKey // claim this hour, even if we're past the window
+        if (secOfHour > fireSec + 5) return // missed it (long pause) — skip to next hour
+        val cfgSnapshot = cfg
+        Thread {
+            runCatching { fireMetodForsBurst(cfgSnapshot, fireSec) }.onFailure { Log.e(TAG, "mf burst error", it) }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** Sends the hourly SMS burst, spin-waiting the last stretch to hit the exact second. */
+    private fun fireMetodForsBurst(cfg: MetodForsConfig, fireSec: Int) {
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
         if (payments.isEmpty()) return
-        MskClock.sleepUntil(target) // hit xx:59:55 to the millisecond
+        MskClock.sleepUntil(MskClock.epochAtSecOfHour(fireSec)) // hit xx:59:55 to the millisecond
         val count = cfg.hourlyBurstCount.coerceAtLeast(1)
         val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
         Log.i(TAG, "Метод Форс burst: $count SMS at msk=${MskClock.mskHms()}")

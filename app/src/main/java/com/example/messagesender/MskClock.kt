@@ -74,6 +74,16 @@ object MskClock {
         return target
     }
 
+    /** The true-epoch millis of THIS hour's [fireSecOfHour] moment (may already be
+     *  in the past — unlike [nextFireEpoch], no +1h adjustment). */
+    fun epochAtSecOfHour(fireSecOfHour: Int): Long {
+        val cal = mskCalendar()
+        val ms = cal.get(Calendar.MILLISECOND)
+        val curSec = secondOfHour(cal)
+        val topOfHour = trueEpoch() - (curSec * 1000L + ms)
+        return topOfHour + fireSecOfHour * 1000L
+    }
+
     /** Blocking, precise wait until [targetTrueEpoch]; returns false if interrupted. */
     fun sleepUntil(targetTrueEpoch: Long): Boolean {
         while (true) {
