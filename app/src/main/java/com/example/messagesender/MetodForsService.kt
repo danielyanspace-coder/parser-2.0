@@ -157,7 +157,8 @@ class MetodForsService : AccessibilityService() {
             }
             Outcome.REPEAT -> {
                 reportDebug("Вижу «${cfg.repeatLabel}» — нажимаю и жду «${cfg.symbolWord}».")
-                if (tapText(cfg.repeatLabel, TEST_STEP_TIMEOUT)) successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
+                pressAll(cfg.repeatLabel, verbose = true)
+                successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
             }
             Outcome.NONE -> reportDebug("После «${cfg.sendLabel}» не вижу ни «${cfg.backToFinanceLabel}», ни «${cfg.repeatLabel}». Вижу: " + dumpVisibleTexts())
         }
@@ -198,8 +199,8 @@ class MetodForsService : AccessibilityService() {
                 val repeatAt = MskClock.nextFireEpoch(cfg.ruleB.fireSec)
                 Log.i(TAG, "«Повторить» on Rule B — waiting until ${cfg.ruleB.fireSec}s to tap it")
                 MskClock.sleepUntil(repeatAt)
-                if (!tapText(cfg.repeatLabel, TAP_TIMEOUT)) { Log.w(TAG, "Повторить not tappable"); return }
-                Log.i(TAG, "«Повторить» tapped at msk=${MskClock.mskHms()}")
+                pressAll(cfg.repeatLabel)
+                Log.i(TAG, "«Повторить» pressed at msk=${MskClock.mskHms()}")
                 // After «Повторить» the same handshake must follow; if no «символ»
                 // arrives, do nothing and wait for the next window.
                 successBranch(cfg, pay, isRuleB, requireSymbol = true)
@@ -318,6 +319,35 @@ class MetodForsService : AccessibilityService() {
             }
             if (findTextAnywhere(cfg.sendLabel) == null) return true // screen changed → pressed
             // Still on the send screen — retry, tapping everything again.
+        }
+        return true
+    }
+
+    /**
+     * Robustly taps EVERY on-screen occurrence of [label] (both ways) and retries
+     * until the label disappears — i.e. the tap took effect and the screen moved on.
+     * Used for «Повторить», which intermittently missed with a single tap.
+     */
+    private fun pressAll(label: String, verbose: Boolean = false, attempts: Int = 6): Boolean {
+        for (a in 1..attempts) {
+            val matches = ArrayList<AccessibilityNodeInfo>()
+            for (r in allRoots()) collectMatches(r, label, matches)
+            if (matches.isEmpty()) {
+                if (waitForTappable(label, 5000) == null) {
+                    if (verbose) reportDebug("Не вижу «$label» на экране.")
+                    return false
+                }
+                continue
+            }
+            if (verbose && a == 1) reportDebug("Нашёл «$label»: ${matches.size} шт — жму все (попытка $a).")
+            for (n in matches) tapNodeHard(n)
+            Log.i(TAG, "$label: tapped ${matches.size} node(s), attempt #$a at msk=${MskClock.mskHms()}")
+            val end = System.currentTimeMillis() + 3500
+            while (System.currentTimeMillis() < end) {
+                if (findTextAnywhere(label) == null) return true // label gone → pressed
+                sleep(250)
+            }
+            // Still visible — retry, tapping everything again.
         }
         return true
     }
