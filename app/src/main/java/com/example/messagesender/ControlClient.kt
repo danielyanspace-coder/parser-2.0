@@ -110,8 +110,8 @@ object ControlClient {
         }
     }
 
-    /** Reports one completed "Метод Форс" transfer (rule "A" = xx:12:59, "B" = xx:59:59). */
-    fun reportMetodFors(c: Context, requisites: String, amount: String, rule: String) {
+    /** Reports one completed "Метод Форс" transfer (the xx:59:58 rule). */
+    fun reportMetodFors(c: Context, requisites: String, amount: String) {
         val server = DeviceStore.serverUrl(c)
         val id = DeviceStore.deviceId(c)
         val secret = DeviceStore.secret(c)
@@ -120,7 +120,7 @@ object ControlClient {
             val body = JSONObject()
                 .put("deviceId", id).put("secret", secret)
                 .put("type", "metodfors").put("requisites", requisites)
-                .put("amount", amount).put("rule", rule)
+                .put("amount", amount)
                 .toString()
             post(server.trimEnd('/') + "/api/device/event", body, 15000)
         } catch (e: Exception) {

