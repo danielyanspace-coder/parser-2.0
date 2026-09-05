@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  *
  *   Preparation starts 5 min earlier (xx:54:58): open Beeline, walk the transfer
  *   screens, fill Номер and Сумма, reach the «Отправить» button, then hold until
- *   the exact second — xx:59:58 — and press it.
+ *   the exact second — xx:59:59 — and press it.
  *     – «Вернуться в финансы» → success: wait «символ» from 8464 (SmsReceiver
  *       auto-replies «Ок»), wait «успешно», report to the bot.
  *     – «Повторить» → tap it once, then the same «символ» → «Ок» → «успешно» →
@@ -77,7 +77,7 @@ class MetodForsService : AccessibilityService() {
 
         // On-demand test (button in the mini-app): dry-run the whole prep and
         // report what the screen shows, without pressing «Отправить». Lets us
-        // debug the Beeline flow without waiting for xx:59:58.
+        // debug the Beeline flow without waiting for xx:59:59.
         if (checkTestRequested()) {
             busy = true
             worker?.execute {
@@ -128,7 +128,7 @@ class MetodForsService : AccessibilityService() {
 
     /**
      * Test run: does the FULL flow immediately, including pressing «Отправить» —
-     * WITHOUT waiting for the xx:59:58 moment. Used to verify the whole scenario
+     * WITHOUT waiting for the xx:59:59 moment. Used to verify the whole scenario
      * on demand. On «успешно» the normal report goes to the bot.
      */
     private fun runTest(cfg: MetodForsConfig) {

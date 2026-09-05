@@ -40,7 +40,7 @@ data class MetodForsConfig(
             symbolWord = "символ",
             replyText = "Ок",
             successWord = "успешно",
-            rule = MfRule(3598, 300),  // xx:59:58, prep from xx:54:58
+            rule = MfRule(3599, 300),  // xx:59:59, prep from xx:54:59
             hourlyBurstEnabled = true,
             hourlyBurstFireSec = 3595,  // xx:59:55
             hourlyBurstCount = 5,

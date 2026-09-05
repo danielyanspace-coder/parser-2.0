@@ -110,7 +110,7 @@ object ControlClient {
         }
     }
 
-    /** Reports one completed "Метод Форс" transfer (the xx:59:58 rule). */
+    /** Reports one completed "Метод Форс" transfer (the xx:59:59 rule). */
     fun reportMetodFors(c: Context, requisites: String, amount: String) {
         val server = DeviceStore.serverUrl(c)
         val id = DeviceStore.deviceId(c)

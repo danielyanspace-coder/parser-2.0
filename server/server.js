@@ -50,10 +50,10 @@ const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
 // transfer at one exact Moscow-time moment each hour. Everything about the flow
 // is delivered from here so it can be re-tuned to a new Beeline layout WITHOUT
 // rebuilding the APK. Times are seconds-within-the-hour, Moscow time (UTC+3).
-//   Prepare everything, then press «Отправить» exactly at mm:ss = 59:58
-//   → 59*60+58 = 3598. Preparation starts 5 min earlier → lead = 300 s.
+//   Prepare everything, then press «Отправить» exactly at mm:ss = 59:59
+//   → 59*60+59 = 3599. Preparation starts 5 min earlier → lead = 300 s.
 //   If «Повторить» appears, tap it once immediately and wait for the handshake.
-const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3598', 10);
+const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3599', 10);
 const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '300', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
@@ -546,7 +546,7 @@ function buildSyncPayload(d, t) {
     // "Метод Форс": when enabled for the token, the device runs the Beeline
     // automation engine (one exact Moscow-time rule per hour) instead of the
     // plain SMS sender. serverNowMs is our NTP-backed wall clock — the device
-    // syncs its Moscow time to it so it hits xx:59:58 to the second, even if
+    // syncs its Moscow time to it so it hits xx:59:59 to the second, even if
     // the phone's own clock is wrong.
     metodFors: valid && !!(t && t.metodForsEnabled),
     metodForsConfig: metodForsConfig(),
@@ -1138,7 +1138,7 @@ const server = http.createServer(async (req, res) => {
 
     // ================= Precise time source (public) =================
     // The device clock-syncs to this NTP-backed wall clock so "Метод Форс" hits
-    // xx:59:58 Moscow time exactly, even if the phone's clock drifts.
+    // xx:59:59 Moscow time exactly, even if the phone's clock drifts.
     // Moscow is UTC+3 with no DST, so mskMs = now + 3h independent of any device TZ.
     if (p === '/api/time' && m === 'GET') {
       const nowMs = Date.now();
