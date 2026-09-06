@@ -39,6 +39,10 @@ const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 // The single Telegram id allowed into the in-app admin panel.
 const ADMIN_TG_ID = String(process.env.ADMIN_TG_ID || '8211351879');
+// SIGNL4 inbound webhook: a gateway alert (declined / retry / passport) on a
+// device whose token owner is the admin ALSO raises a SIGNL4 alert here. Only for
+// the admin's own devices — never for other users.
+const SIGNL4_WEBHOOK_URL = process.env.SIGNL4_WEBHOOK_URL || 'https://connect.signl4.com/webhook/ukyn26vr3a';
 // Telegram bot token (BotFather). When set, initData signatures are verified.
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 // Fixed SMS recipient for every payment message; also the source of the
@@ -619,6 +623,29 @@ function tgAnswerCallback(id, text) {
 }
 function eschtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+// Fires one SIGNL4 alert (admin devices only — see the gwalert handler).
+function signl4Alert(message, deviceName, code) {
+  if (!SIGNL4_WEBHOOK_URL) return;
+  try {
+    const u = new URL(SIGNL4_WEBHOOK_URL);
+    const payload = JSON.stringify({
+      Title: 'ALFA · оповещение шлюза',
+      Message: message,
+      device: deviceName || '',
+      code: code || '',
+    });
+    const req = https.request({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (r) => { r.on('data', () => {}); r.on('end', () => {}); });
+    req.on('error', (e) => console.error('signl4 error:', e.message));
+    req.write(payload);
+    req.end();
+  } catch (e) { console.error('signl4 exception:', e.message); }
 }
 
 // --- Report computation ---
@@ -1544,6 +1571,30 @@ const server = http.createServer(async (req, res) => {
         tgSend(t.telegramId,
           `❗️ Реквизит «<b>${eschtml(requisites)}</b>» отклоняется платёжным шлюзом — замените его на другой.\n` +
           `Устройство: «<b>${eschtml(d.name)}</b>».`);
+      }
+
+      // Gateway alert: a device caught one of the tracked SMS phrases (from 7878
+      // or 8464). Notify the token owner + employees with the device name; for the
+      // admin's OWN devices additionally raise a SIGNL4 alert.
+      if (body.type === 'gwalert' && t) {
+        const code = String(body.requisites || '').slice(0, 32);
+        const MAP = {
+          declined: '⚠️ Операция отклонена платежным шлюзом. Замените реквизит',
+          retry: 'Оплата не прошла. Возможно, дело в реквизите',
+          passport: 'Экстренная информация',
+        };
+        const text = MAP[code];
+        if (text) {
+          const recips = [];
+          if (t.telegramId) recips.push(t.telegramId);
+          for (const emp of (t.employees || [])) if (emp && emp.telegramId) recips.push(emp.telegramId);
+          const msg = `${text}\nУстройство: <b>${eschtml(d.name)}</b>`;
+          for (const chatId of recips) tgSend(chatId, msg);
+          if (String(t.telegramId || '') === ADMIN_TG_ID) {
+            signl4Alert(`${text} — Устройство: ${d.name}`, d.name, code);
+          }
+        }
+        return sendJson(res, 200, { ok: true });
       }
       // A device caught "символ" (from the probe pool or otherwise) → treat it
       // as a system-wide signal, same as the MacroDroid webhook.

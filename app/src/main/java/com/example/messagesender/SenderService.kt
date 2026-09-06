@@ -35,6 +35,10 @@ import java.util.concurrent.TimeUnit
 class SenderService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    // Keeps the display powered so the phone never auto-locks while paired — the
+    // Метод Форс automation needs the screen on. Separate from the partial lock
+    // (which only keeps the CPU running with the screen off).
+    private var screenLock: PowerManager.WakeLock? = null
     private var syncThread: Thread? = null
     @Volatile private var stopping = false
     @Volatile private var resyncNow = false
@@ -560,17 +564,35 @@ class SenderService : Service() {
     // --- Wake lock ---
 
     private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AlfaSms::sender").apply {
-            setReferenceCounted(false)
-            acquire(12 * 60 * 60 * 1000L)
+        if (wakeLock?.isHeld != true) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AlfaSms::sender").apply {
+                setReferenceCounted(false)
+                acquire(12 * 60 * 60 * 1000L)
+            }
+        }
+        // Keep the screen on so the device never locks (30-min auto-lock). Deprecated
+        // API but still the only way to hold the display awake app-wide, which the
+        // Метод Форс automation requires. Best-effort — never crash if unsupported.
+        if (screenLock?.isHeld != true) {
+            try {
+                @Suppress("DEPRECATION")
+                screenLock = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,
+                    "AlfaSms::screen"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(12 * 60 * 60 * 1000L)
+                }
+            } catch (e: Exception) { Log.w(TAG, "screen wake lock unavailable: ${e.message}") }
         }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+        screenLock?.let { if (it.isHeld) it.release() }
+        screenLock = null
     }
 
     // --- Notification ---

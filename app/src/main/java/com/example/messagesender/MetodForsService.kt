@@ -171,74 +171,162 @@ class MetodForsService : AccessibilityService() {
         }
 
         // 2) Hold until the exact second, then press «Отправить».
-        Log.i(TAG, "Reached Отправить; holding until ${cfg.rule.fireSec}s (msk=${MskClock.mskHms()})")
+        Log.i(TAG, "Reached Отправить; holding until the fire moment (msk=${MskClock.mskHms()})")
         MskClock.sleepUntil(fireEpoch)
         pressSend(cfg)
         Log.i(TAG, "Отправить pressed at msk=${MskClock.mskHms()}")
 
-        // 3) Evaluate the outcome screen.
-        when (waitOutcome(cfg, RESULT_TIMEOUT)) {
-            Outcome.BACK_TO_FINANCE -> successBranch(cfg, pay)
-            Outcome.REPEAT -> {
-                // Tap «Повторить» once, right away — no waiting for another window.
-                Log.i(TAG, "«Повторить» — tapping once")
-                pressAll(cfg.repeatLabel)
-                Log.i(TAG, "«Повторить» pressed at msk=${MskClock.mskHms()}")
-                // After «Повторить» the same handshake must follow; if no «символ»
-                // arrives, do nothing and wait for the next hourly window.
-                successBranch(cfg, pay, requireSymbol = true)
+        // 3) After «Отправить», «Повторить» often keeps re-appearing. Tap it EVERY
+        // time it shows for up to REPEAT_WINDOW_MS. Regardless of outcome, hand
+        // control back to the scheduler RULE_MAX_MS after the fire moment so the
+        // next hour starts perfectly clean (busy is released well before the next
+        // prep window). If the символ→Ок→успешно handshake completes in between,
+        // report the transfer once and finish early.
+        val startedAt = System.currentTimeMillis()
+        val repeatDeadline = startedAt + REPEAT_WINDOW_MS
+        val hardDeadline = fireEpoch + RULE_MAX_MS
+        while (running && System.currentTimeMillis() < hardDeadline) {
+            if (System.currentTimeMillis() < repeatDeadline && findTextAnywhere(cfg.repeatLabel) != null) {
+                pressAll(cfg.repeatLabel, attempts = 2)
+                Log.i(TAG, "«Повторить» tapped at msk=${MskClock.mskHms()}")
             }
-            Outcome.NONE -> Log.w(TAG, "No outcome screen detected within timeout — aborting")
+            if (MetodFors.lastSuccessAt > startedAt) {
+                Log.i(TAG, "«успешно» received — reporting to bot")
+                reportMetodForsSuccess(pay)
+                break
+            }
+            sleep(800)
         }
+        Log.i(TAG, "Rule window finished (msk=${MskClock.mskHms()}) — back to scheduler")
+    }
+
+    /** Reports one completed transfer to the bot and rotates to the next block. */
+    private fun reportMetodForsSuccess(pay: Payment) {
+        val appCtx = applicationContext
+        Thread { ControlClient.reportMetodFors(appCtx, pay.requisites, pay.amount) }
+            .apply { isDaemon = true }.start()
+        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
+        if (payments.isNotEmpty()) DeviceStore.setMfBlockIndex(this, (DeviceStore.mfBlockIndex(this) + 1) % payments.size)
     }
 
     /**
      * Opens Beeline and walks: Сервисы → Перевести деньги → Перевод на карту
      * за рубеж → Таджикистан → По номеру карты → Мой номер → [card field]=Номер →
      * Продолжить → [amount field]=Сумма → Продолжить → wait «Отправить».
+     *
+     * Beeline sometimes fails to render a screen (a blank/stuck page). Every step
+     * therefore has a recovery: if the needed control isn't seen within [stepTimeout],
+     * pull the screen down to refresh and give it another [REFRESH_RETRY_WAIT]. If it
+     * still doesn't appear, the whole flow restarts Beeline from scratch (up to
+     * [MAX_BEELINE_RESTARTS] times) and walks the steps again.
      */
     private fun prepareTransfer(cfg: MetodForsConfig, pay: Payment,
-                               verbose: Boolean = false, stepTimeout: Long = STEP_TIMEOUT): Boolean {
-        if (!launchPackage(cfg.beelinePackage)) {
-            Log.w(TAG, "cannot launch ${cfg.beelinePackage}")
-            if (verbose) reportDebug("Не удалось открыть приложение ${cfg.beelinePackage}.")
-            return false
+                               verbose: Boolean = false, stepTimeout: Long = STEP_PRIMARY_WAIT): Boolean {
+        var restarts = 0
+        while (running) {
+            if (!launchPackage(cfg.beelinePackage)) {
+                Log.w(TAG, "cannot launch ${cfg.beelinePackage}")
+                if (verbose) reportDebug("Не удалось открыть приложение ${cfg.beelinePackage}.")
+                return false
+            }
+            sleep(3500) // let the app come to the foreground and render
+            if (walkPrep(cfg, pay, verbose, stepTimeout)) return true
+            // A screen would not load even after a pull-to-refresh → restart Beeline.
+            restarts++
+            if (restarts > MAX_BEELINE_RESTARTS) {
+                if (verbose) reportDebug("Экран не прогрузился даже после перезапусков Билайна.")
+                return false
+            }
+            Log.i(TAG, "Beeline screen stuck — restarting the app (attempt ${restarts + 1})")
+            if (verbose) reportDebug("Перезапускаю Билайн (попытка ${restarts + 1})…")
+            sleep(800)
         }
-        sleep(3500) // let the app come to the foreground and render
+        return false
+    }
 
-        // Each step WAITS until its label appears, then taps it. Real rules wait
-        // effectively forever and stay silent; the TEST uses a short timeout and
-        // reports where it stopped (with what it sees on screen).
+    /** One full pass through the transfer screens. Returns false if a control never
+     *  loaded (even after a refresh) so the caller can restart Beeline and retry. */
+    private fun walkPrep(cfg: MetodForsConfig, pay: Payment, verbose: Boolean, stepTimeout: Long): Boolean {
         for (step in cfg.steps) {
-            if (!tapText(step, stepTimeout)) {
+            val node = awaitTappableWithRefresh(step, stepTimeout, verbose)
+            if (node == null) {
                 if (verbose) reportDebug("Остановился на шаге «$step». Что вижу на экране: " +
                     (dumpVisibleTexts().ifBlank { "(пусто — не могу прочитать интерфейс)" }))
                 return false
             }
+            clickNode(node)
             sleep(STEP_PAUSE)
         }
         // Card number field → Номер → Продолжить.
-        if (!fillField(cfg.cardFieldHint, pay.requisites)) {
+        if (!fillFieldWithRefresh(cfg.cardFieldHint, pay.requisites, verbose)) {
             if (verbose) reportDebug("Не нашёл поле карты «${cfg.cardFieldHint}». Вижу: " + dumpVisibleTexts())
             return false
         }
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, stepTimeout)) {
+        awaitTappableWithRefresh(cfg.continueLabel, stepTimeout, verbose)?.let { clickNode(it) } ?: run {
             if (verbose) reportDebug("Не нашёл «${cfg.continueLabel}» после номера. Вижу: " + dumpVisibleTexts()); return false
         }
         sleep(STEP_PAUSE)
         // Amount field → Сумма → Продолжить.
-        if (!fillField(null, pay.amount)) {
+        if (!fillFieldWithRefresh(null, pay.amount, verbose)) {
             if (verbose) reportDebug("Не нашёл поле суммы. Вижу: " + dumpVisibleTexts()); return false
         }
         sleep(STEP_PAUSE)
-        if (!tapText(cfg.continueLabel, stepTimeout)) {
+        awaitTappableWithRefresh(cfg.continueLabel, stepTimeout, verbose)?.let { clickNode(it) } ?: run {
             if (verbose) reportDebug("Не нашёл «${cfg.continueLabel}» после суммы. Вижу: " + dumpVisibleTexts()); return false
         }
         // Wait for «Отправить» to be present (do NOT press it yet).
-        val ok = waitForText(cfg.sendLabel, stepTimeout) != null
+        val ok = awaitTextWithRefresh(cfg.sendLabel, stepTimeout, verbose) != null
         if (!ok && verbose) reportDebug("Не нашёл кнопку «${cfg.sendLabel}». Вижу: " + dumpVisibleTexts())
         return ok
+    }
+
+    /** Waits for a tappable [label]; on timeout pulls-to-refresh once and retries. */
+    private fun awaitTappableWithRefresh(label: String, primaryWaitMs: Long, verbose: Boolean): AccessibilityNodeInfo? {
+        waitForTappable(label, primaryWaitMs)?.let { return it }
+        if (verbose) reportDebug("Не вижу «$label» — обновляю страницу (тяну вниз)…")
+        Log.i(TAG, "«$label» not found in ${primaryWaitMs}ms — pull-to-refresh")
+        pullToRefresh()
+        sleep(1200)
+        return waitForTappable(label, REFRESH_RETRY_WAIT)
+    }
+
+    /** Waits for [text] to be present; on timeout pulls-to-refresh once and retries. */
+    private fun awaitTextWithRefresh(text: String, primaryWaitMs: Long, verbose: Boolean): AccessibilityNodeInfo? {
+        waitForText(text, primaryWaitMs)?.let { return it }
+        if (verbose) reportDebug("Не вижу «$text» — обновляю страницу (тяну вниз)…")
+        Log.i(TAG, "«$text» not present in ${primaryWaitMs}ms — pull-to-refresh")
+        pullToRefresh()
+        sleep(1200)
+        return waitForText(text, REFRESH_RETRY_WAIT)
+    }
+
+    /** Fills a field; on failure pulls-to-refresh once and retries. */
+    private fun fillFieldWithRefresh(hint: String?, value: String, verbose: Boolean): Boolean {
+        if (fillField(hint, value, FIELD_PRIMARY_WAIT)) return true
+        if (verbose) reportDebug("Поле не прогрузилось — обновляю страницу (тяну вниз)…")
+        pullToRefresh()
+        sleep(1200)
+        return fillField(hint, value, REFRESH_RETRY_WAIT)
+    }
+
+    /**
+     * Pull-to-refresh: a firm swipe DOWN from the middle of the screen. Beeline
+     * re-fetches a stuck screen on this gesture, which fixes the blank-page bug.
+     */
+    private fun pullToRefresh() {
+        try {
+            val dm = resources.displayMetrics
+            val x = dm.widthPixels / 2f
+            val y1 = dm.heightPixels * 0.35f
+            val y2 = dm.heightPixels * 0.92f
+            val path = Path().apply { moveTo(x, y1); lineTo(x, y2) }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 350))
+                .build()
+            dispatchGesture(gesture, null, null)
+            Log.i(TAG, "pull-to-refresh dispatched")
+        } catch (e: Exception) { Log.e(TAG, "pullToRefresh failed", e) }
     }
 
     /**
@@ -526,8 +614,8 @@ class MetodForsService : AccessibilityService() {
      * Fills a text field with [value]. Prefers a field whose text/hint contains
      * [hint]; otherwise the first editable field on screen.
      */
-    private fun fillField(hint: String?, value: String): Boolean {
-        val deadline = System.currentTimeMillis() + FIELD_TIMEOUT
+    private fun fillField(hint: String?, value: String, timeoutMs: Long = FIELD_PRIMARY_WAIT): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
         while (running && System.currentTimeMillis() < deadline) {
             val root = rootInActiveWindow
             val field = if (!hint.isNullOrBlank()) {
@@ -571,15 +659,18 @@ class MetodForsService : AccessibilityService() {
 
         fun isRunning(): Boolean = INSTANCE != null
 
-        // We do NOT give up early on UI labels: each step waits until its label
-        // actually appears (a very large cap only guards against an eternal lock).
-        private const val UI_WAIT = 1_800_000L     // 30 min — effectively "wait until it shows"
-        private const val STEP_TIMEOUT = UI_WAIT    // find each navigation label
-        private const val STEP_PAUSE = 700L        // settle between screens
-        private const val FIELD_TIMEOUT = UI_WAIT   // find a text field
-        private const val TAP_TIMEOUT = UI_WAIT     // find a button to tap
-        private const val SEND_WAIT_TIMEOUT = UI_WAIT // «Отправить» to appear after prep
-        private const val RESULT_TIMEOUT = 180_000L // outcome screen after «Отправить» (3 min)
+        private const val STEP_PAUSE = 700L         // settle between screens
+        // Per screen: wait up to 1 min for the needed control; if it never shows,
+        // pull-to-refresh and give it 10 s more; still nothing → restart Beeline.
+        private const val STEP_PRIMARY_WAIT = 60_000L  // 1 min per navigation label
+        private const val FIELD_PRIMARY_WAIT = 60_000L // 1 min per text field
+        private const val REFRESH_RETRY_WAIT = 10_000L // after a pull-to-refresh
+        private const val MAX_BEELINE_RESTARTS = 2     // full Beeline restarts before giving up
+        // After «Отправить»: keep tapping «Повторить» for up to 3 min; always return
+        // control to the scheduler 5 min after the fire moment.
+        private const val REPEAT_WINDOW_MS = 180_000L  // 3 min of «Повторить» tapping
+        private const val RULE_MAX_MS = 300_000L       // 5 min hard cap from fire moment
+        private const val RESULT_TIMEOUT = 180_000L // (test) outcome screen after «Отправить»
         private const val TEST_STEP_TIMEOUT = 20_000L // test: wait each label up to 20 s, then report
         private const val SYMBOL_WAIT = 90_000L    // «символ» from 8464
         private const val SUCCESS_WAIT = 120_000L  // «успешно» after «Ок»
