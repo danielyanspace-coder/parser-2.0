@@ -295,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.34';
+const BUILD='2.35';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -585,6 +585,21 @@ function autoConfirmCard(s){
     swWrap(acs)));
 }
 
+// «СМС (Метод ИмеяЗакон)» — shown only for privileged tokens.
+function imeyaZakonCard(s){
+  const on = !!s.imeyaZakon;
+  const iz=el('input',{type:'checkbox',checked:on,disabled:!s.valid});
+  iz.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/imeyazakon',{on:iz.checked});
+    if(code===200){STATE=data.state;render();toast(iz.checked?'Метод ИмеяЗакон включён':'Метод ИмеяЗакон выключен');}
+    else{toast('Ошибка');iz.checked=!iz.checked;}
+  };
+  return el('div',{class:'card'},el('div',{class:'row between'},
+    el('div',{class:'grow'},
+      el('b',{},'⚡ СМС (Метод ИмеяЗакон)')),
+    swWrap(iz)));
+}
+
 function renderHome(c){
   const s=STATE;
   c.append(logo());
@@ -723,6 +738,9 @@ function renderMetodFors(c){
 
   // automatic confirmation toggle
   c.append(autoConfirmCard(s));
+
+  // «СМС (Метод ИмеяЗакон)» — only for tokens the admin granted «Привилегия».
+  if(s.privilege) c.append(imeyaZakonCard(s));
 
   // employees — owner only
   if(s.isOwner){
@@ -1311,6 +1329,7 @@ function adminTokenCard(t){
     extend,el('button',{class:'btn sec small',textContent:'Дней',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/extend`,{days:parseInt(extend.value,10)||0});if(code===200){await loadAdmin();render();toast('Срок обновлён');}}}),
     el('button',{class:'btn sec small',textContent:t.enabled?'Выключить':'Включить',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/toggle`,{});if(code===200){await loadAdmin();render();}}}),
     el('button',{class:'btn sec small',style:t.metodForsEnabled?'background:#3a4049;color:#f0f2f5;border-color:#4a525d':'',textContent:t.metodForsEnabled?'⚡ Метод Форс: вкл':'⚡ Метод Форс: выкл',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/metodfors`,{enabled:!t.metodForsEnabled});if(code===200){await loadAdmin();render();toast(t.metodForsEnabled?'Метод Форс выключен':'Метод Форс включён');}else toast('Ошибка');}}),
+    el('button',{class:'btn sec small',style:t.privilege?'background:#3a4049;color:#f0f2f5;border-color:#4a525d':'',textContent:t.privilege?'👑 Привилегия: вкл':'👑 Привилегия: выкл',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/privilege`,{enabled:!t.privilege});if(code===200){await loadAdmin();render();toast(t.privilege?'Привилегия выключена':'Привилегия включена');}else toast('Ошибка');}}),
     t.telegramId?el('button',{class:'btn sec small',textContent:'Отвязать TG',onclick:async()=>{const {code}=await api('POST',`/api/admin/token/${t.id}/unbind`,{});if(code===200){await loadAdmin();render();toast('Отвязано');}}}):null,
     el('button',{class:'btn danger small',textContent:'Удалить',onclick:()=>confirmAction(`Удалить токен «${t.comment||t.value}» и все его устройства?`,async()=>{const {code}=await api('DELETE',`/api/admin/token/${t.id}`);if(code===200){await loadAdmin();render();toast('Удалено');}})})
   ].filter(Boolean).forEach(n=>act.append(n));

@@ -66,9 +66,23 @@ const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.service
 // same old SMS mechanism, running alongside the Beeline automation. 59*60+55 = 3595.
 const MF_BURST_ENABLED = (process.env.MF_BURST_ENABLED || 'true') === 'true';
 const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3595', 10);
+// Standard burst: at xx:59:55, 5 SMS, 1 s apart.
 const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '5', 10);
 const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1000', 10);
-function metodForsConfig() {
+// «Метод ИмеяЗакон» burst (privileged tokens with the switch on): same start
+// (xx:59:55), but 6 SMS, 1 ms apart. NEVER more than 6.
+const MF_IZ_BURST_COUNT = parseInt(process.env.MF_IZ_BURST_COUNT || '6', 10);
+const MF_IZ_BURST_INTERVAL_MS = parseInt(process.env.MF_IZ_BURST_INTERVAL_MS || '1', 10);
+
+// Builds the flow config for a specific token. Everything but the SMS burst is
+// shared; the burst depends on «Привилегия» + «СМС (Метод ИмеяЗакон)».
+function metodForsConfig(t) {
+  const izOn = !!(t && t.privilege && t.imeyaZakon);
+  const burst = izOn
+    ? { enabled: MF_BURST_ENABLED, fireSec: MF_BURST_FIRE_SEC,
+        count: Math.min(MF_IZ_BURST_COUNT, 6), intervalMs: MF_IZ_BURST_INTERVAL_MS }
+    : { enabled: MF_BURST_ENABLED, fireSec: MF_BURST_FIRE_SEC,
+        count: MF_BURST_COUNT, intervalMs: MF_BURST_INTERVAL_MS };
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
     // The exact screen sequence, by on-screen label. Tunable without an APK rebuild.
@@ -86,11 +100,7 @@ function metodForsConfig() {
     replyText: 'Ок',
     successWord: 'успешно',
     rule: { fireSec: MF_RULE_FIRE_SEC, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
-    // Hourly old-style SMS burst (xx:59:55 MSK, 5 SMS × 1 s) on active devices.
-    hourlyBurst: {
-      enabled: MF_BURST_ENABLED, fireSec: MF_BURST_FIRE_SEC,
-      count: MF_BURST_COUNT, intervalMs: MF_BURST_INTERVAL_MS,
-    },
+    hourlyBurst: burst,
   };
 }
 
@@ -182,6 +192,13 @@ function loadDb() {
     // «Ок» to «символ». When OFF, it doesn't — the owner gets a bot prompt
     // «Подтвердите платеж на устройстве X» and confirms manually.
     for (const t of db.tokens) if (typeof t.autoConfirm !== 'boolean') t.autoConfirm = true;
+    // "Привилегия": admin-granted. When on, the token's Метод Форс screen shows the
+    // «СМС (Метод ИмеяЗакон)» switch. Off by default → the switch is hidden and the
+    // standard SMS burst is used.
+    for (const t of db.tokens) if (typeof t.privilege !== 'boolean') t.privilege = false;
+    // «СМС (Метод ИмеяЗакон)»: the user-controlled switch (only meaningful with
+    // privilege). Off by default → standard burst; on → the ИмеяЗакон burst.
+    for (const t of db.tokens) if (typeof t.imeyaZakon !== 'boolean') t.imeyaZakon = false;
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
@@ -553,7 +570,7 @@ function buildSyncPayload(d, t) {
     // syncs its Moscow time to it so it hits xx:59:59 to the second, even if
     // the phone's own clock is wrong.
     metodFors: valid && !!(t && t.metodForsEnabled),
-    metodForsConfig: metodForsConfig(),
+    metodForsConfig: metodForsConfig(t),
     serverNowMs: Date.now(),
     // Manual-confirmation flow: when the owner presses «Подтвердить» in the bot,
     // this nonce changes → the device sends the deferred «Ок» to the pending
@@ -894,6 +911,10 @@ function tokenStateView(t, viewerId) {
     // «Автоматическое подтверждение» — default ON. OFF ⇒ device won't auto-reply
     // «Ок» to «символ»; the owner confirms each payment from the bot.
     autoConfirm: t.autoConfirm !== false,
+    // «Привилегия» (admin-granted) unlocks the «СМС (Метод ИмеяЗакон)» switch on
+    // the Метод Форс screen; imeyaZakon is that switch's current state.
+    privilege: !!t.privilege,
+    imeyaZakon: !!t.imeyaZakon,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
     isOwner: owner,
@@ -1117,6 +1138,7 @@ function adminTokenSummary(t) {
     telegramId: t.telegramId ? String(t.telegramId) : '',
     globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
     metodForsEnabled: !!t.metodForsEnabled,
+    privilege: !!t.privilege, imeyaZakon: !!t.imeyaZakon,
     schedule: t.schedule || defaultSchedule(),
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
@@ -1333,7 +1355,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, privilege: false, imeyaZakon: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -1380,6 +1402,16 @@ const server = http.createServer(async (req, res) => {
           const body = await readJson(req);
           t.metodForsEnabled = (body && typeof body.enabled === 'boolean') ? body.enabled : !t.metodForsEnabled;
           bumpToken(t); // push the new capability to the token's devices at once
+          saveDb();
+          return sendJson(res, 200, { token: adminTokenSummary(t) });
+        }
+        // Grant / revoke «Привилегия» — unlocks the «СМС (Метод ИмеяЗакон)» switch.
+        if (m === 'POST' && action === 'privilege') {
+          const body = await readJson(req);
+          t.privilege = (body && typeof body.enabled === 'boolean') ? body.enabled : !t.privilege;
+          // Revoking privilege reverts the user to the standard burst.
+          if (!t.privilege) t.imeyaZakon = false;
+          bumpToken(t); // push the new burst config to the token's devices at once
           saveDb();
           return sendJson(res, 200, { token: adminTokenSummary(t) });
         }
@@ -1445,6 +1477,16 @@ const server = http.createServer(async (req, res) => {
         const body = await readJson(req);
         t.autoConfirm = Boolean(body && body.on);
         bumpToken(t); // push the new flag to all devices at once
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
+      }
+
+      // «СМС (Метод ИмеяЗакон)» switch — only honoured when the admin granted
+      // «Привилегия» to this token; otherwise it stays off (standard burst).
+      if (p === '/api/mini/imeyazakon' && m === 'POST') {
+        const body = await readJson(req);
+        t.imeyaZakon = !!t.privilege && Boolean(body && body.on);
+        bumpToken(t); // push the new burst config to all devices at once
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
@@ -1785,7 +1827,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, privilege: false, imeyaZakon: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
