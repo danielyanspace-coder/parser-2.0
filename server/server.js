@@ -61,13 +61,15 @@ const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3599', 10);
 const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '300', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
-// Hourly SMS burst for «Метод Форс» tokens: every hour at mm:ss = 59:55 (Moscow),
-// each active device sends `count` payment SMS to 7878, `intervalMs` apart — the
-// same old SMS mechanism, running alongside the Beeline automation. 59*60+55 = 3595.
+// Hourly SMS burst for «Метод Форс» tokens: every hour each active device sends
+// `count` payment SMS to 7878, `intervalMs` apart — the same old SMS mechanism,
+// running alongside the Beeline automation.
 const MF_BURST_ENABLED = (process.env.MF_BURST_ENABLED || 'true') === 'true';
-const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3595', 10);
+// Burst at mm:ss = 59:59 (59*60+59 = 3599), 5 SMS, 1 ms apart — all five land
+// within the 59th second (nothing spills into the next hour).
+const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3599', 10);
 const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '5', 10);
-const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1000', 10);
+const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1', 10);
 function metodForsConfig() {
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
