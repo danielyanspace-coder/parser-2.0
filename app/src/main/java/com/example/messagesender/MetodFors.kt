@@ -22,6 +22,9 @@ data class MetodForsConfig(
     val replyText: String,
     val successWord: String,
     val rule: MfRule,
+    // All «Отправить» moments this hour. The device prepares and presses at each,
+    // one at a time. Falls back to [rule] when the server sends only a single rule.
+    val windows: List<MfRule>,
     val hourlyBurstEnabled: Boolean,
     val hourlyBurstFireSec: Int,
     val hourlyBurstFireMs: Int,
@@ -46,7 +49,8 @@ data class MetodForsConfig(
             symbolWord = "символ",
             replyText = "Ок",
             successWord = "успешно",
-            rule = MfRule(3599, 300, 0),  // xx:59:59, prep from xx:54:59
+            rule = MfRule(3599, 240, 0),  // xx:59:59, prep from xx:55:59 (4 min)
+            windows = listOf(MfRule(3599, 240, 0)),
             hourlyBurstEnabled = true,
             hourlyBurstFireSec = 3597,
             hourlyBurstFireMs = 0,
@@ -67,11 +71,16 @@ data class MetodForsConfig(
             val steps = o.optJSONArray("steps")?.let { arr ->
                 (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s -> s.isNotBlank() } }
             }?.takeIf { it.isNotEmpty() } ?: d.steps
+            fun ruleOf(r: JSONObject, def: MfRule) = MfRule(
+                r.optInt("fireSec", def.fireSec), r.optInt("prepLeadSec", def.prepLeadSec), r.optInt("fireMs", def.fireMs))
             fun rule(name: String, def: MfRule): MfRule {
                 val r = o.optJSONObject(name) ?: return def
-                return MfRule(r.optInt("fireSec", def.fireSec), r.optInt("prepLeadSec", def.prepLeadSec),
-                    r.optInt("fireMs", def.fireMs))
+                return ruleOf(r, def)
             }
+            val parsedRule = rule("rule", d.rule)
+            val windows = o.optJSONArray("windows")?.let { arr ->
+                (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let { r -> ruleOf(r, parsedRule) } }
+            }?.takeIf { it.isNotEmpty() } ?: listOf(parsedRule)
             return MetodForsConfig(
                 beelinePackage = o.optString("beelinePackage", d.beelinePackage).ifBlank { d.beelinePackage },
                 steps = steps,
@@ -83,7 +92,8 @@ data class MetodForsConfig(
                 symbolWord = o.optString("symbolWord", d.symbolWord).ifBlank { d.symbolWord },
                 replyText = o.optString("replyText", d.replyText).ifBlank { d.replyText },
                 successWord = o.optString("successWord", d.successWord).ifBlank { d.successWord },
-                rule = rule("rule", d.rule),
+                rule = parsedRule,
+                windows = windows,
                 hourlyBurstEnabled = o.optJSONObject("hourlyBurst")?.optBoolean("enabled", d.hourlyBurstEnabled) ?: d.hourlyBurstEnabled,
                 hourlyBurstFireSec = o.optJSONObject("hourlyBurst")?.optInt("fireSec", d.hourlyBurstFireSec) ?: d.hourlyBurstFireSec,
                 hourlyBurstFireMs = o.optJSONObject("hourlyBurst")?.optInt("fireMs", d.hourlyBurstFireMs) ?: d.hourlyBurstFireMs,

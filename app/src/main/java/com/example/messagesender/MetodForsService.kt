@@ -93,11 +93,19 @@ class MetodForsService : AccessibilityService() {
         if (!eligible()) return
         val nowTrue = MskClock.trueEpoch()
 
-        // The prep window is [fireEpoch - prepLead, fireEpoch).
-        val fireEpoch = MskClock.nextFireEpoch(cfg.rule.fireSec, cfg.rule.fireMs)
-        val prepStart = fireEpoch - cfg.rule.prepLeadSec * 1000L
-        if (nowTrue !in prepStart..fireEpoch) return
-        val key = "R@$fireEpoch"
+        // Each window has its own prep window [fireEpoch - prepLead, fireEpoch). Among
+        // the windows we're currently inside, pick the one firing soonest and run it.
+        // The device does one cycle at a time (the busy flag), so windows should be
+        // spaced apart — a window whose moment passes while we're busy is simply missed.
+        val windows = cfg.windows.ifEmpty { listOf(cfg.rule) }
+        var bestFire = Long.MAX_VALUE
+        for (w in windows) {
+            val fireEpoch = MskClock.nextFireEpoch(w.fireSec, w.fireMs)
+            val prepStart = fireEpoch - w.prepLeadSec * 1000L
+            if (nowTrue in prepStart..fireEpoch && fireEpoch < bestFire) bestFire = fireEpoch
+        }
+        if (bestFire == Long.MAX_VALUE) return
+        val key = "R@$bestFire"
         if (key == lastFiredKey) return
         lastFiredKey = key
 
@@ -105,7 +113,7 @@ class MetodForsService : AccessibilityService() {
         worker?.execute {
             try {
                 if (!MskClock.hasServerTime()) MskClock.syncHttp(DeviceStore.serverUrl(this))
-                runRule(fireEpoch, cfg)
+                runRule(bestFire, cfg)
             } catch (e: Exception) {
                 Log.e(TAG, "runRule error", e)
             } finally {

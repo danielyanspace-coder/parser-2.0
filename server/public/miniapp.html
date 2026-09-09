@@ -295,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.43';
+const BUILD='2.44';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -627,6 +627,22 @@ function sendTimeCard(s){
       swWrap(sysSw)));
 }
 
+// «Отключить смс-метод» — turns off the hourly SMS burst for this user. The app
+// (нажатие «Отправить») keeps working. Independent of «Метод системы».
+function smsOffCard(s){
+  const on=!!s.mfSmsOff;
+  const sw=el('input',{type:'checkbox',checked:on,disabled:!s.valid});
+  sw.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/mfsmsoff',{on:sw.checked});
+    if(code===200){STATE=data.state;render();toast(sw.checked?'СМС-метод отключён':'СМС-метод включён');}
+    else{toast('Ошибка');sw.checked=!sw.checked;}
+  };
+  return el('div',{class:'card'},el('div',{class:'row between'},
+    el('div',{class:'grow'},el('b',{},'📵 Отключить смс-метод'),
+      el('div',{class:'small muted',style:'margin-top:4px'},'Отключает автоматическую отправку СМС. Останется только работа через приложение (нажатие «Отправить»).')),
+    swWrap(sw)));
+}
+
 function renderHome(c){
   const s=STATE;
   c.append(logo());
@@ -765,6 +781,9 @@ function renderMetodFors(c){
 
   // user-set «Отправить» moment
   c.append(sendTimeCard(s));
+
+  // disable the SMS burst for this user
+  c.append(smsOffCard(s));
 
   // automatic confirmation toggle
   c.append(autoConfirmCard(s));
@@ -1219,27 +1238,36 @@ function renderAdmin(c){
       swWrap(psw))));
   }
 
-  // «Метод системы» — one global «Отправить» time applied to every token that
+  // «Метод системы» — a LIST of «Отправить» windows applied to every token that
   // turned on «Работать по методу системы». Independent of per-user times.
   {
     const st=ADMIN_DATA.settings||{};
-    const tot=Number.isFinite(st.mfSystemSendSec)?st.mfSystemSendSec:3599;
-    const minIn=el('input',{type:'number',min:'0',max:'59',value:String(Math.floor(tot/60)),inputmode:'numeric',style:'width:70px;text-align:center'});
-    const secIn=el('input',{type:'number',min:'0',max:'59',value:String(tot%60),inputmode:'numeric',style:'width:70px;text-align:center'});
-    const save=el('button',{class:'btn sec small',textContent:'Применить'});
-    save.onclick=async()=>{
+    const pad=n=>String(n).padStart(2,'0');
+    const wins=(Array.isArray(st.mfSystemWindows)&&st.mfSystemWindows.length?st.mfSystemWindows:[3599]).slice().sort((a,b)=>a-b);
+    const saveWins=async(list)=>{
+      const uniq=Array.from(new Set(list.map(v=>Math.min(3599,Math.max(0,v|0))))).sort((a,b)=>a-b);
+      const {code}=await api('POST','/api/admin/mfsystem',{windows:uniq.length?uniq:[3599]});
+      if(code===200){await loadAdmin();render();toast('Метод системы обновлён');}else toast('Ошибка');
+    };
+    const list=el('div',{style:'margin:8px 0'});
+    wins.forEach(w=>{
+      list.append(el('div',{class:'row between',style:'padding:4px 0;border-bottom:1px solid var(--line)'},
+        el('b',{},'🕐 '+pad(Math.floor(w/60))+':'+pad(w%60)),
+        el('button',{class:'btn danger small',textContent:'Удалить',onclick:()=>saveWins(wins.filter(x=>x!==w))})));
+    });
+    const minIn=el('input',{type:'number',min:'0',max:'59',value:'59',inputmode:'numeric',style:'width:64px;text-align:center'});
+    const secIn=el('input',{type:'number',min:'0',max:'59',value:'59',inputmode:'numeric',style:'width:64px;text-align:center'});
+    const add=el('button',{class:'btn sec small',textContent:'＋ Добавить окно',onclick:()=>{
       const mi=Math.min(59,Math.max(0,parseInt(minIn.value,10)||0));
       const se=Math.min(59,Math.max(0,parseInt(secIn.value,10)||0));
-      save.disabled=true;
-      const {code}=await api('POST','/api/admin/mfsystem',{sec:mi*60+se});
-      if(code===200){await loadAdmin();render();toast('Метод системы обновлён');}
-      else{toast('Ошибка');save.disabled=false;}
-    };
+      saveWins(wins.concat([mi*60+se]));
+    }});
     c.append(el('div',{class:'card'},
-      el('b',{},'🛡 Метод системы · время «Отправить»'),
-      el('div',{class:'small muted',style:'margin:4px 0 10px'},'Применяется ко всем, у кого включено «Работать по методу системы». Индивидуальные времена пользователей здесь не отображаются.'),
+      el('b',{},'🛡 Метод системы · окна «Отправить»'),
+      el('div',{class:'small muted',style:'margin:4px 0 0'},'Приложение готовится и жмёт «Отправить» в каждом окне. Применяется ко всем, у кого включено «Работать по методу системы». Окна ставьте с запасом (≈10 мин) — устройство делает один цикл за раз.'),
+      list,
       el('div',{class:'row',style:'gap:8px;align-items:center;flex-wrap:wrap'},
-        minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),save)));
+        minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),add)));
   }
 
   // Successful ("успешно") payments summary
@@ -1377,7 +1405,9 @@ function adminTokenCard(t){
     let line;
     if(t.mfSystemMode){ line='⏱ Отправить: по системе'; }
     else{ const tot=Number.isFinite(t.mfSendSec)?t.mfSendSec:3599; line='⏱ Отправить: '+p(Math.floor(tot/60))+':'+p(tot%60)+' (своё)'; }
-    card.append(el('div',{class:'small muted',style:'margin-top:6px'},line+' · подготовка за 4 мин'));
+    line+=' · подготовка за 4 мин';
+    if(t.mfSmsOff) line+=' · 📵 СМС выкл';
+    card.append(el('div',{class:'small muted',style:'margin-top:6px'},line));
   }
 
   const quota=el('input',{type:'number',value:t.deviceLimit,min:'0',style:'width:70px'});
