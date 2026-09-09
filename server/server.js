@@ -65,10 +65,11 @@ const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.service
 // `count` payment SMS to 7878, `intervalMs` apart — the same old SMS mechanism,
 // running alongside the Beeline automation.
 const MF_BURST_ENABLED = (process.env.MF_BURST_ENABLED || 'true') === 'true';
-// Burst at mm:ss = 59:54 (59*60+54 = 3594), 6 SMS, 300 ms apart.
-const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3594', 10);
-const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '6', 10);
-const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '300', 10);
+// Burst at mm:ss = 59:57 (59*60+57 = 3597), 5 SMS, 1 ms apart — a true volley,
+// all five fire together within the 57th second.
+const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3597', 10);
+const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '5', 10);
+const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1', 10);
 function metodForsConfig() {
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
