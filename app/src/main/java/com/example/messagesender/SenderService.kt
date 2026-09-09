@@ -420,11 +420,12 @@ class SenderService : Service() {
         }.apply { isDaemon = true }.start()
     }
 
-    /** Sends the hourly SMS burst, spin-waiting the last stretch to hit the exact second. */
+    /** Sends the hourly SMS burst, spin-waiting the last stretch to hit the exact moment. */
     private fun fireMetodForsBurst(cfg: MetodForsConfig, fireSec: Int) {
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
         if (payments.isEmpty()) return
-        MskClock.sleepUntil(MskClock.epochAtSecOfHour(fireSec)) // hit xx:59:55 to the millisecond
+        // Hit the exact fire moment (seconds + milliseconds) to the millisecond.
+        MskClock.sleepUntil(MskClock.epochAtSecOfHour(fireSec, cfg.hourlyBurstFireMs))
         val count = cfg.hourlyBurstCount.coerceAtLeast(1)
         val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
         Log.i(TAG, "Метод Форс burst: $count SMS at msk=${MskClock.mskHms()}")

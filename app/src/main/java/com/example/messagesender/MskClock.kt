@@ -64,24 +64,24 @@ object MskClock {
      * [fireSecOfHour] (0..3599). If that moment already passed this hour, returns
      * the one in the next hour.
      */
-    fun nextFireEpoch(fireSecOfHour: Int): Long {
+    fun nextFireEpoch(fireSecOfHour: Int, fireMsOfSec: Int = 0): Long {
         val cal = mskCalendar()
         val ms = cal.get(Calendar.MILLISECOND)
         val curSec = secondOfHour(cal)
         val topOfHour = trueEpoch() - (curSec * 1000L + ms)
-        var target = topOfHour + fireSecOfHour * 1000L
+        var target = topOfHour + fireSecOfHour * 1000L + fireMsOfSec
         if (target <= trueEpoch()) target += 3_600_000L
         return target
     }
 
-    /** The true-epoch millis of THIS hour's [fireSecOfHour] moment (may already be
-     *  in the past — unlike [nextFireEpoch], no +1h adjustment). */
-    fun epochAtSecOfHour(fireSecOfHour: Int): Long {
+    /** The true-epoch millis of THIS hour's [fireSecOfHour]+[fireMsOfSec] moment
+     *  (may already be in the past — unlike [nextFireEpoch], no +1h adjustment). */
+    fun epochAtSecOfHour(fireSecOfHour: Int, fireMsOfSec: Int = 0): Long {
         val cal = mskCalendar()
         val ms = cal.get(Calendar.MILLISECOND)
         val curSec = secondOfHour(cal)
         val topOfHour = trueEpoch() - (curSec * 1000L + ms)
-        return topOfHour + fireSecOfHour * 1000L
+        return topOfHour + fireSecOfHour * 1000L + fireMsOfSec
     }
 
     /** Blocking, precise wait until [targetTrueEpoch]; returns false if interrupted. */

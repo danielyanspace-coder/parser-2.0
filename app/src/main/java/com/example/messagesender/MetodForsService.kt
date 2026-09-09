@@ -94,7 +94,7 @@ class MetodForsService : AccessibilityService() {
         val nowTrue = MskClock.trueEpoch()
 
         // The prep window is [fireEpoch - prepLead, fireEpoch).
-        val fireEpoch = MskClock.nextFireEpoch(cfg.rule.fireSec)
+        val fireEpoch = MskClock.nextFireEpoch(cfg.rule.fireSec, cfg.rule.fireMs)
         val prepStart = fireEpoch - cfg.rule.prepLeadSec * 1000L
         if (nowTrue !in prepStart..fireEpoch) return
         val key = "R@$fireEpoch"

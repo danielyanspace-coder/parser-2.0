@@ -8,7 +8,7 @@ import org.json.JSONObject
  * Beeline screen labels, package name and rule times can be re-tuned without an
  * APK rebuild). See `metodForsConfig()` on the server for the source of truth.
  */
-data class MfRule(val fireSec: Int, val prepLeadSec: Int)
+data class MfRule(val fireSec: Int, val prepLeadSec: Int, val fireMs: Int = 0)
 
 data class MetodForsConfig(
     val beelinePackage: String,
@@ -24,6 +24,7 @@ data class MetodForsConfig(
     val rule: MfRule,
     val hourlyBurstEnabled: Boolean,
     val hourlyBurstFireSec: Int,
+    val hourlyBurstFireMs: Int,
     val hourlyBurstCount: Int,
     val hourlyBurstIntervalMs: Int,
 ) {
@@ -40,11 +41,12 @@ data class MetodForsConfig(
             symbolWord = "символ",
             replyText = "Ок",
             successWord = "успешно",
-            rule = MfRule(3599, 300),  // xx:59:59, prep from xx:54:59
+            rule = MfRule(3596, 300, 800),  // xx:59:56.800, prep from xx:54:56
             hourlyBurstEnabled = true,
-            hourlyBurstFireSec = 3595,  // xx:59:55
+            hourlyBurstFireSec = 3596,  // xx:59:56.800
+            hourlyBurstFireMs = 800,
             hourlyBurstCount = 5,
-            hourlyBurstIntervalMs = 1000,
+            hourlyBurstIntervalMs = 1,
         )
 
         fun from(context: Context): MetodForsConfig {
@@ -60,7 +62,8 @@ data class MetodForsConfig(
             }?.takeIf { it.isNotEmpty() } ?: d.steps
             fun rule(name: String, def: MfRule): MfRule {
                 val r = o.optJSONObject(name) ?: return def
-                return MfRule(r.optInt("fireSec", def.fireSec), r.optInt("prepLeadSec", def.prepLeadSec))
+                return MfRule(r.optInt("fireSec", def.fireSec), r.optInt("prepLeadSec", def.prepLeadSec),
+                    r.optInt("fireMs", def.fireMs))
             }
             return MetodForsConfig(
                 beelinePackage = o.optString("beelinePackage", d.beelinePackage).ifBlank { d.beelinePackage },
@@ -76,6 +79,7 @@ data class MetodForsConfig(
                 rule = rule("rule", d.rule),
                 hourlyBurstEnabled = o.optJSONObject("hourlyBurst")?.optBoolean("enabled", d.hourlyBurstEnabled) ?: d.hourlyBurstEnabled,
                 hourlyBurstFireSec = o.optJSONObject("hourlyBurst")?.optInt("fireSec", d.hourlyBurstFireSec) ?: d.hourlyBurstFireSec,
+                hourlyBurstFireMs = o.optJSONObject("hourlyBurst")?.optInt("fireMs", d.hourlyBurstFireMs) ?: d.hourlyBurstFireMs,
                 hourlyBurstCount = o.optJSONObject("hourlyBurst")?.optInt("count", d.hourlyBurstCount) ?: d.hourlyBurstCount,
                 hourlyBurstIntervalMs = o.optJSONObject("hourlyBurst")?.optInt("intervalMs", d.hourlyBurstIntervalMs) ?: d.hourlyBurstIntervalMs,
             )
