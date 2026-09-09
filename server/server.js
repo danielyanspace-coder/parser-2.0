@@ -59,7 +59,9 @@ const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
 //   If «Повторить» appears, tap it once immediately and wait for the handshake.
 const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3599', 10);
 const MF_RULE_FIRE_MS = parseInt(process.env.MF_RULE_FIRE_MS || '0', 10);
-const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '300', 10);
+// Preparation window: 4 minutes before the send moment (open the app, fill in
+// everything, then hold until the exact second).
+const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '240', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
 // Hourly SMS burst for «Метод Форс» tokens: every hour each active device sends
@@ -76,7 +78,13 @@ const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3597', 10);
 const MF_BURST_FIRE_MS = parseInt(process.env.MF_BURST_FIRE_MS || '0', 10);
 const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '5', 10);
 const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '500', 10);
-function metodForsConfig() {
+// Per-token send moment: each user picks when «Отправить» is first pressed (a
+// second-of-hour, 0..3599). Falls back to the global default when unset.
+function mfSendSec(t) {
+  const v = t && Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC;
+  return Math.min(3599, Math.max(0, v));
+}
+function metodForsConfig(t) {
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
     // The exact screen sequence, by on-screen label. Tunable without an APK rebuild.
@@ -93,7 +101,7 @@ function metodForsConfig() {
     symbolWord: 'символ',
     replyText: 'Ок',
     successWord: 'успешно',
-    rule: { fireSec: MF_RULE_FIRE_SEC, fireMs: MF_RULE_FIRE_MS, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
+    rule: { fireSec: mfSendSec(t), fireMs: 0, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
     // Hourly SMS burst on active devices, alongside the Beeline automation. offsetsMs
     // is the exact per-SMS schedule; fireSec/count/intervalMs are a legacy fallback.
     hourlyBurst: {
@@ -192,6 +200,8 @@ function loadDb() {
     // «Ок» to «символ». When OFF, it doesn't — the owner gets a bot prompt
     // «Подтвердите платеж на устройстве X» and confirms manually.
     for (const t of db.tokens) if (typeof t.autoConfirm !== 'boolean') t.autoConfirm = true;
+    // Per-token «Отправить» moment (second-of-hour). Default xx:59:59.
+    for (const t of db.tokens) if (!Number.isFinite(t.mfSendSec)) t.mfSendSec = MF_RULE_FIRE_SEC;
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
@@ -563,7 +573,7 @@ function buildSyncPayload(d, t) {
     // syncs its Moscow time to it so it hits xx:59:59 to the second, even if
     // the phone's own clock is wrong.
     metodFors: valid && !!(t && t.metodForsEnabled),
-    metodForsConfig: metodForsConfig(),
+    metodForsConfig: metodForsConfig(t),
     serverNowMs: Date.now(),
     // Manual-confirmation flow: when the owner presses «Подтвердить» in the bot,
     // this nonce changes → the device sends the deferred «Ок» to the pending
@@ -904,6 +914,8 @@ function tokenStateView(t, viewerId) {
     // «Автоматическое подтверждение» — default ON. OFF ⇒ device won't auto-reply
     // «Ок» to «символ»; the owner confirms each payment from the bot.
     autoConfirm: t.autoConfirm !== false,
+    // Per-token «Отправить» moment (second-of-hour). The user sets it themselves.
+    mfSendSec: Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
     isOwner: owner,
@@ -1127,6 +1139,7 @@ function adminTokenSummary(t) {
     telegramId: t.telegramId ? String(t.telegramId) : '',
     globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
     metodForsEnabled: !!t.metodForsEnabled,
+    mfSendSec: Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC,
     schedule: t.schedule || defaultSchedule(),
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
@@ -1343,7 +1356,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -1455,6 +1468,18 @@ const server = http.createServer(async (req, res) => {
         const body = await readJson(req);
         t.autoConfirm = Boolean(body && body.on);
         bumpToken(t); // push the new flag to all devices at once
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
+      }
+
+      // Per-token «Отправить» moment: the user sets when the button is first
+      // pressed (a second-of-hour, 0..3599). Preparation starts 4 min earlier.
+      if (p === '/api/mini/mfsendtime' && m === 'POST') {
+        const body = await readJson(req);
+        let sec = parseInt(body && body.sec, 10);
+        if (!Number.isFinite(sec)) sec = MF_RULE_FIRE_SEC;
+        t.mfSendSec = Math.min(3599, Math.max(0, sec));
+        bumpToken(t); // push the new send moment to all devices at once
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
@@ -1795,7 +1820,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
