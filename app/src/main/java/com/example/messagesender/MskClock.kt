@@ -84,6 +84,16 @@ object MskClock {
         return topOfHour + fireSecOfHour * 1000L + fireMsOfSec
     }
 
+    /** The true-epoch millis of the start (mm:ss = 00:00.000) of the current Moscow
+     *  hour. Capture it once, then add fixed ms-of-hour offsets — an offset of
+     *  3_600_000 lands exactly on the top of the NEXT hour. */
+    fun topOfHourEpoch(): Long {
+        val cal = mskCalendar()
+        val ms = cal.get(Calendar.MILLISECOND)
+        val curSec = secondOfHour(cal)
+        return trueEpoch() - (curSec * 1000L + ms)
+    }
+
     /** Blocking, precise wait until [targetTrueEpoch]; returns false if interrupted. */
     fun sleepUntil(targetTrueEpoch: Long): Boolean {
         while (true) {

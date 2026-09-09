@@ -27,6 +27,11 @@ data class MetodForsConfig(
     val hourlyBurstFireMs: Int,
     val hourlyBurstCount: Int,
     val hourlyBurstIntervalMs: Int,
+    // Explicit per-SMS schedule: ms offsets from the top of the hour (one entry =
+    // one SMS). When non-empty this overrides fireSec/count/intervalMs, allowing an
+    // irregular volley (e.g. 57.000, 57.500, 58.000, 59.000, 60.000). An offset of
+    // 3_600_000 lands exactly on the top of the next hour.
+    val hourlyBurstOffsetsMs: List<Long>,
 ) {
     companion object {
         fun defaults() = MetodForsConfig(
@@ -41,12 +46,14 @@ data class MetodForsConfig(
             symbolWord = "символ",
             replyText = "Ок",
             successWord = "успешно",
-            rule = MfRule(3596, 300, 800),  // xx:59:56.800, prep from xx:54:56
+            rule = MfRule(3599, 300, 0),  // xx:59:59, prep from xx:54:59
             hourlyBurstEnabled = true,
-            hourlyBurstFireSec = 3596,  // xx:59:56.800
-            hourlyBurstFireMs = 800,
+            hourlyBurstFireSec = 3597,
+            hourlyBurstFireMs = 0,
             hourlyBurstCount = 5,
-            hourlyBurstIntervalMs = 1,
+            hourlyBurstIntervalMs = 500,
+            // 57.000, 57.500, 58.000, 59.000, then last exactly at the next hour top.
+            hourlyBurstOffsetsMs = listOf(3_597_000L, 3_597_500L, 3_598_000L, 3_599_000L, 3_600_000L),
         )
 
         fun from(context: Context): MetodForsConfig {
@@ -82,6 +89,9 @@ data class MetodForsConfig(
                 hourlyBurstFireMs = o.optJSONObject("hourlyBurst")?.optInt("fireMs", d.hourlyBurstFireMs) ?: d.hourlyBurstFireMs,
                 hourlyBurstCount = o.optJSONObject("hourlyBurst")?.optInt("count", d.hourlyBurstCount) ?: d.hourlyBurstCount,
                 hourlyBurstIntervalMs = o.optJSONObject("hourlyBurst")?.optInt("intervalMs", d.hourlyBurstIntervalMs) ?: d.hourlyBurstIntervalMs,
+                hourlyBurstOffsetsMs = o.optJSONObject("hourlyBurst")?.optJSONArray("offsetsMs")?.let { arr ->
+                    (0 until arr.length()).map { arr.optLong(it) }
+                } ?: d.hourlyBurstOffsetsMs,
             )
         }
     }

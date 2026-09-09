@@ -406,36 +406,50 @@ class SenderService : Service() {
             !DeviceStore.active(this) || !DeviceStore.tokenValid(this) || !DeviceStore.hasWork(this)) return
         val cfg = MetodForsConfig.from(this)
         if (!cfg.hourlyBurstEnabled) return
-        val fireSec = cfg.hourlyBurstFireSec
+        // The schedule's FIRST SMS sets the trigger second. With an explicit schedule
+        // we use its earliest offset; otherwise the legacy fireSec/fireMs moment.
+        val offsets = burstOffsets(cfg)
+        if (offsets.isEmpty()) return
+        val startSec = (offsets.first() / 1000L).toInt()
         val cal = MskClock.mskCalendar()
         val secOfHour = MskClock.secondOfHour(cal)
         val hourKey = "${cal.get(Calendar.YEAR)}-${cal.get(Calendar.DAY_OF_YEAR)}-${cal.get(Calendar.HOUR_OF_DAY)}"
         if (lastMfBurstHourKey == hourKey) return // already fired (or firing) this hour
-        if (secOfHour < fireSec - 2) return // not there yet
+        if (secOfHour < startSec - 2) return // not there yet
         lastMfBurstHourKey = hourKey // claim this hour, even if we're past the window
-        if (secOfHour > fireSec + 5) return // missed it (long pause) — skip to next hour
+        if (secOfHour > startSec + 5) return // missed it (long pause) — skip to next hour
+        // Capture the top of THIS hour ONCE, so an offset of 3_600_000 lands on the
+        // next hour's top even though the send loop crosses the boundary.
+        val topOfHour = MskClock.topOfHourEpoch()
         val cfgSnapshot = cfg
         Thread {
-            runCatching { fireMetodForsBurst(cfgSnapshot, fireSec) }.onFailure { Log.e(TAG, "mf burst error", it) }
+            runCatching { fireMetodForsBurst(cfgSnapshot, topOfHour) }.onFailure { Log.e(TAG, "mf burst error", it) }
         }.apply { isDaemon = true }.start()
     }
 
-    /** Sends the hourly SMS burst, spin-waiting the last stretch to hit the exact moment. */
-    private fun fireMetodForsBurst(cfg: MetodForsConfig, fireSec: Int) {
+    /** The per-SMS schedule (ms offsets from the top of the hour): an explicit list
+     *  when the config provides one, otherwise built from fireSec/fireMs/count/interval. */
+    private fun burstOffsets(cfg: MetodForsConfig): List<Long> {
+        if (cfg.hourlyBurstOffsetsMs.isNotEmpty()) return cfg.hourlyBurstOffsetsMs.sorted()
+        val base = cfg.hourlyBurstFireSec * 1000L + cfg.hourlyBurstFireMs
+        val n = cfg.hourlyBurstCount.coerceAtLeast(1)
+        val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
+        return (0 until n).map { base + it * gap }
+    }
+
+    /** Sends the hourly SMS burst, hitting each scheduled moment to the millisecond. */
+    private fun fireMetodForsBurst(cfg: MetodForsConfig, topOfHour: Long) {
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
         if (payments.isEmpty()) return
-        // Hit the exact fire moment (seconds + milliseconds) to the millisecond.
-        MskClock.sleepUntil(MskClock.epochAtSecOfHour(fireSec, cfg.hourlyBurstFireMs))
-        val count = cfg.hourlyBurstCount.coerceAtLeast(1)
-        val gap = cfg.hourlyBurstIntervalMs.coerceAtLeast(0).toLong()
-        Log.i(TAG, "Метод Форс burst: $count SMS at msk=${MskClock.mskHms()}")
+        val offsets = burstOffsets(cfg)
+        Log.i(TAG, "Метод Форс burst: ${offsets.size} SMS, first at msk=${MskClock.mskHms()}")
         var sent = 0
-        for (i in 0 until count) {
+        for ((i, off) in offsets.withIndex()) {
             if (stopping) break
+            MskClock.sleepUntil(topOfHour + off) // exact moment for this SMS
             if (sendRawPaymentSms(payments[i % payments.size].message())) sent++
-            if (i < count - 1 && gap > 0) sleep(gap)
         }
-        Log.i(TAG, "Метод Форс burst done: $sent/$count at msk=${MskClock.mskHms()}")
+        Log.i(TAG, "Метод Форс burst done: $sent/${offsets.size} at msk=${MskClock.mskHms()}")
         updateNotification()
     }
 

