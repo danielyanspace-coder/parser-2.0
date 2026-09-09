@@ -295,7 +295,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.42';
+const BUILD='2.43';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -586,16 +586,19 @@ function autoConfirmCard(s){
 }
 
 // Time (minute:second within the hour) when «Отправить» is first pressed. Each
-// user sets their own; preparation starts 4 minutes earlier.
+// user sets their own; preparation starts 4 minutes earlier. With «Работать по
+// методу системы» on, the admin's global time applies and the fields lock.
 function sendTimeCard(s){
   const total = Number.isFinite(s.mfSendSec) ? s.mfSendSec : 3599;
   const mm = Math.floor(total/60), ss = total%60;
   const pad=n=>String(n).padStart(2,'0');
+  const sys = !!s.mfSystemMode;
+  const locked = sys || !s.valid;
   const minIn=el('input',{type:'number',min:'0',max:'59',value:String(mm),inputmode:'numeric',
-    style:'width:70px;text-align:center',disabled:!s.valid});
+    style:'width:70px;text-align:center',disabled:locked});
   const secIn=el('input',{type:'number',min:'0',max:'59',value:String(ss),inputmode:'numeric',
-    style:'width:70px;text-align:center',disabled:!s.valid});
-  const save=el('button',{class:'btn sec small',textContent:'Сохранить',disabled:!s.valid});
+    style:'width:70px;text-align:center',disabled:locked});
+  const save=el('button',{class:'btn sec small',textContent:'Сохранить',disabled:locked});
   save.onclick=async()=>{
     const mi=Math.min(59,Math.max(0,parseInt(minIn.value,10)||0));
     const se=Math.min(59,Math.max(0,parseInt(secIn.value,10)||0));
@@ -604,12 +607,24 @@ function sendTimeCard(s){
     if(code===200){STATE=data.state;render();toast('Время сохранено');}
     else{toast('Ошибка');save.disabled=false;}
   };
+  // «Работать по методу системы» switch.
+  const sysSw=el('input',{type:'checkbox',checked:sys,disabled:!s.valid});
+  sysSw.onchange=async()=>{
+    const {code,data}=await api('POST','/api/mini/mfsystemmode',{on:sysSw.checked});
+    if(code===200){STATE=data.state;render();toast(sysSw.checked?'Метод системы включён':'Метод системы выключен');}
+    else{toast('Ошибка');sysSw.checked=!sysSw.checked;}
+  };
   return el('div',{class:'card'},
     el('b',{},'⏱ Время нажатия «Отправить»'),
     el('div',{class:'small muted',style:'margin:4px 0 10px'},
-      'Минута и секунда часа, когда приложение нажимает «Отправить» (сейчас '+pad(mm)+':'+pad(ss)+'). Подготовка начинается за 4 минуты до этого.'),
+      sys?'Работает метод системы — время задаёт администратор. Чтобы выставить своё, выключите переключатель ниже.'
+         :'Минута и секунда часа, когда приложение нажимает «Отправить» (сейчас '+pad(mm)+':'+pad(ss)+'). Подготовка начинается за 4 минуты до этого.'),
     el('div',{class:'row',style:'gap:8px;align-items:center;flex-wrap:wrap'},
-      minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),save));
+      minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),save),
+    el('div',{class:'row between',style:'margin-top:12px'},
+      el('div',{class:'grow'},el('b',{},'🛡 Работать по методу системы'),
+        el('div',{class:'small muted',style:'margin-top:4px'},'Использовать общее время, заданное администратором. Пока включено — своё время менять нельзя.')),
+      swWrap(sysSw)));
 }
 
 function renderHome(c){
@@ -1204,6 +1219,29 @@ function renderAdmin(c){
       swWrap(psw))));
   }
 
+  // «Метод системы» — one global «Отправить» time applied to every token that
+  // turned on «Работать по методу системы». Independent of per-user times.
+  {
+    const st=ADMIN_DATA.settings||{};
+    const tot=Number.isFinite(st.mfSystemSendSec)?st.mfSystemSendSec:3599;
+    const minIn=el('input',{type:'number',min:'0',max:'59',value:String(Math.floor(tot/60)),inputmode:'numeric',style:'width:70px;text-align:center'});
+    const secIn=el('input',{type:'number',min:'0',max:'59',value:String(tot%60),inputmode:'numeric',style:'width:70px;text-align:center'});
+    const save=el('button',{class:'btn sec small',textContent:'Применить'});
+    save.onclick=async()=>{
+      const mi=Math.min(59,Math.max(0,parseInt(minIn.value,10)||0));
+      const se=Math.min(59,Math.max(0,parseInt(secIn.value,10)||0));
+      save.disabled=true;
+      const {code}=await api('POST','/api/admin/mfsystem',{sec:mi*60+se});
+      if(code===200){await loadAdmin();render();toast('Метод системы обновлён');}
+      else{toast('Ошибка');save.disabled=false;}
+    };
+    c.append(el('div',{class:'card'},
+      el('b',{},'🛡 Метод системы · время «Отправить»'),
+      el('div',{class:'small muted',style:'margin:4px 0 10px'},'Применяется ко всем, у кого включено «Работать по методу системы». Индивидуальные времена пользователей здесь не отображаются.'),
+      el('div',{class:'row',style:'gap:8px;align-items:center;flex-wrap:wrap'},
+        minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),save)));
+  }
+
   // Successful ("успешно") payments summary
   if(ADMIN_PAY){
     const t=ADMIN_PAY.total||{count:0,sum:0};
@@ -1333,12 +1371,13 @@ function adminTokenCard(t){
   card.append(el('button',{class:'btn small',style:'margin-top:10px',
     textContent:'🔑 Войти в кабинет',onclick:()=>enterCabinet(t.id, t.comment||t.value)}));
 
-  // Read-only view of the user's chosen «Отправить» moment (Метод Форс tokens).
+  // Read-only view of the token's «Отправить» moment (Метод Форс tokens).
   if(t.metodForsEnabled){
-    const tot=Number.isFinite(t.mfSendSec)?t.mfSendSec:3599;
     const p=n=>String(n).padStart(2,'0');
-    card.append(el('div',{class:'small muted',style:'margin-top:6px'},
-      '⏱ Отправить: '+p(Math.floor(tot/60))+':'+p(tot%60)+' (подготовка за 4 мин)'));
+    let line;
+    if(t.mfSystemMode){ line='⏱ Отправить: по системе'; }
+    else{ const tot=Number.isFinite(t.mfSendSec)?t.mfSendSec:3599; line='⏱ Отправить: '+p(Math.floor(tot/60))+':'+p(tot%60)+' (своё)'; }
+    card.append(el('div',{class:'small muted',style:'margin-top:6px'},line+' · подготовка за 4 мин'));
   }
 
   const quota=el('input',{type:'number',value:t.deviceLimit,min:'0',style:'width:70px'});

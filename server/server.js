@@ -84,6 +84,17 @@ function mfSendSec(t) {
   const v = t && Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC;
   return Math.min(3599, Math.max(0, v));
 }
+// The global «Метод системы» send moment — one value the admin edits; it applies
+// to every token whose «Работать по методу системы» is on.
+function mfSystemSendSec() {
+  const v = db.settings && Number.isFinite(db.settings.mfSystemSendSec) ? db.settings.mfSystemSendSec : MF_RULE_FIRE_SEC;
+  return Math.min(3599, Math.max(0, v));
+}
+// The moment actually used for a token: the system value when it opted into
+// «Метод системы», otherwise its own.
+function effSendSec(t) {
+  return (t && t.mfSystemMode) ? mfSystemSendSec() : mfSendSec(t);
+}
 function metodForsConfig(t) {
   return {
     beelinePackage: MF_BEELINE_PACKAGE,
@@ -101,7 +112,7 @@ function metodForsConfig(t) {
     symbolWord: 'символ',
     replyText: 'Ок',
     successWord: 'успешно',
-    rule: { fireSec: mfSendSec(t), fireMs: 0, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
+    rule: { fireSec: effSendSec(t), fireMs: 0, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
     // Hourly SMS burst on active devices, alongside the Beeline automation. offsetsMs
     // is the exact per-SMS schedule; fireSec/count/intervalMs are a legacy fallback.
     hourlyBurst: {
@@ -202,6 +213,8 @@ function loadDb() {
     for (const t of db.tokens) if (typeof t.autoConfirm !== 'boolean') t.autoConfirm = true;
     // Per-token «Отправить» moment (second-of-hour). Default xx:59:59.
     for (const t of db.tokens) if (!Number.isFinite(t.mfSendSec)) t.mfSendSec = MF_RULE_FIRE_SEC;
+    // «Работать по методу системы»: off by default — each keeps its own time.
+    for (const t of db.tokens) if (typeof t.mfSystemMode !== 'boolean') t.mfSystemMode = false;
     for (const d of db.devices) if (!Array.isArray(d.payments)) d.payments = [];
     return db;
   } catch (e) {
@@ -914,8 +927,10 @@ function tokenStateView(t, viewerId) {
     // «Автоматическое подтверждение» — default ON. OFF ⇒ device won't auto-reply
     // «Ок» to «символ»; the owner confirms each payment from the bot.
     autoConfirm: t.autoConfirm !== false,
-    // Per-token «Отправить» moment (second-of-hour). The user sets it themselves.
+    // Per-token «Отправить» moment (second-of-hour). The user sets it themselves,
+    // unless «Работать по методу системы» is on — then the system value applies.
     mfSendSec: Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC,
+    mfSystemMode: !!t.mfSystemMode,
     schedule: t.schedule || defaultSchedule(),
     recipientNumber: RECIPIENT_NUMBER,
     isOwner: owner,
@@ -1140,6 +1155,7 @@ function adminTokenSummary(t) {
     globalOn: !!t.globalOn, createdAt: t.createdAt || 0,
     metodForsEnabled: !!t.metodForsEnabled,
     mfSendSec: Number.isFinite(t.mfSendSec) ? t.mfSendSec : MF_RULE_FIRE_SEC,
+    mfSystemMode: !!t.mfSystemMode,
     schedule: t.schedule || defaultSchedule(),
     devices: devices.map((d) => ({
       id: d.id, name: d.name, active: !!d.active, paired: !!d.pairedAt,
@@ -1301,7 +1317,8 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, {
           adminTgId: ADMIN_TG_ID,
           totals: { tokens: db.tokens.length, devices: db.devices.length },
-          settings: { probeEnabled: !!(db.settings && db.settings.probeEnabled), probeEligible: probeCount },
+          settings: { probeEnabled: !!(db.settings && db.settings.probeEnabled), probeEligible: probeCount,
+            mfSystemSendSec: mfSystemSendSec() },
           latestVersionCode: readUpdateInfo().versionCode || 0,
           tokens: db.tokens.map(adminTokenSummary),
         });
@@ -1314,6 +1331,19 @@ const server = http.createServer(async (req, res) => {
         db.settings.probeEnabled = Boolean(body && body.enabled);
         saveDb();
         return sendJson(res, 200, { ok: true, probeEnabled: db.settings.probeEnabled });
+      }
+
+      // «Метод системы»: set the one global «Отправить» second-of-hour that applies
+      // to every token with «Работать по методу системы» on. Push to their devices.
+      if (p === '/api/admin/mfsystem' && m === 'POST') {
+        const body = await readJson(req);
+        let sec = parseInt(body && body.sec, 10);
+        if (!Number.isFinite(sec)) sec = MF_RULE_FIRE_SEC;
+        db.settings = db.settings || {};
+        db.settings.mfSystemSendSec = Math.min(3599, Math.max(0, sec));
+        for (const t of db.tokens) if (t.mfSystemMode) bumpToken(t);
+        saveDb();
+        return sendJson(res, 200, { ok: true, mfSystemSendSec: db.settings.mfSystemSendSec });
       }
 
       // Summary of all successful ("успешно") payments across all users.
@@ -1356,7 +1386,7 @@ const server = http.createServer(async (req, res) => {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
           enabled: true, createdAt: now(),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
-          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, workSession: '', schedule: defaultSchedule(), rev: 0,
+          deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, mfSystemMode: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
         db.tokens.push(t);
         saveDb();
@@ -1480,6 +1510,16 @@ const server = http.createServer(async (req, res) => {
         if (!Number.isFinite(sec)) sec = MF_RULE_FIRE_SEC;
         t.mfSendSec = Math.min(3599, Math.max(0, sec));
         bumpToken(t); // push the new send moment to all devices at once
+        saveDb();
+        return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
+      }
+
+      // «Работать по методу системы»: when on, the token uses the admin's global
+      // system time and can't edit its own; when off, its own time applies.
+      if (p === '/api/mini/mfsystemmode' && m === 'POST') {
+        const body = await readJson(req);
+        t.mfSystemMode = Boolean(body && body.on);
+        bumpToken(t); // effective send moment changed → push to devices
         saveDb();
         return sendJson(res, 200, { state: tokenStateView(t, resolveTelegramId(req)) });
       }
@@ -1820,7 +1860,7 @@ const server = http.createServer(async (req, res) => {
         enabled: true, createdAt: now(),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
-        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, workSession: '', schedule: defaultSchedule(), rev: 0,
+        telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, mfSystemMode: false, workSession: '', schedule: defaultSchedule(), rev: 0,
       });
       saveDb();
       res.writeHead(302, { Location: '/admin' }); return res.end();
