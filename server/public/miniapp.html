@@ -109,6 +109,10 @@
 
   /* footer */
   .foot{margin-top:22px;padding-top:16px;border-top:1px solid var(--line);text-align:center}
+  .foot .tokid{display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;background:var(--card);
+    border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-size:13px;color:var(--muted);
+    cursor:pointer;box-shadow:var(--shadow);user-select:all}
+  .foot .tokid b{color:var(--ink);font-weight:800;letter-spacing:.12em;font-variant-numeric:tabular-nums}
   .foot .prod{font-size:13px;color:var(--muted)}
   .foot .prod b{color:var(--ink)}
   .foot .support{margin-top:10px;display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
@@ -285,6 +289,7 @@
   <aside class="sidebar" id="sidebar"></aside>
   <div id="content"></div>
   <div class="foot">
+    <div class="tokid" id="tokidFoot" hidden></div>
     <div class="prod">Production By <b>Sergio</b></div>
     <div class="support" id="supportBtn">Тех&nbsp;поддержка</div>
   </div>
@@ -400,7 +405,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp - lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.49';
+const BUILD='2.50';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -522,6 +527,15 @@ async function bottomNavGo(name){
   if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
   reset(name);
 }
+// Footer: show the token's public 6-digit ID; tap to copy.
+function updateFooter(){
+  const f=document.getElementById('tokidFoot'); if(!f) return;
+  const id=STATE&&STATE.shortId;
+  if(!id){ f.hidden=true; return; }
+  f.hidden=false; f.innerHTML='';
+  f.append(el('span',{},'ID токена:'), el('b',{},id), ic('clipboard',{size:15}));
+  f.onclick=()=>{ try{ navigator.clipboard&&navigator.clipboard.writeText(id); }catch(e){} toast('ID токена скопирован: '+id); };
+}
 function updateBottomNav(){
   const bar=document.getElementById('bottomnav');
   const wrap=document.querySelector('.wrap');
@@ -547,6 +561,7 @@ function render(){
   document.querySelector('.wrap').classList.toggle('mf', MF_MODE);
   updateShell();
   updateBottomNav();
+  updateFooter();
   const v=view.name;
   if(v==='weblogin') return renderWebLogin(c);
   if(ACT_AS && v!=='admin') c.append(actingBanner());
@@ -1527,15 +1542,32 @@ function renderAdmin(c){
       el('div',{class:'grow'},el('label',{class:'field'},'Устройств'),lim)),
     createBtn));
 
-  // token list
-  (ADMIN_DATA.tokens||[]).forEach(t=>c.append(adminTokenCard(t)));
+  // token list + search by ID (or comment)
+  const search=el('input',{type:'text',inputmode:'numeric',placeholder:'Поиск по ID токена или комментарию',value:ADMIN_SEARCH||''});
+  const listWrap=el('div',{});
+  const draw=()=>{
+    listWrap.innerHTML='';
+    const q=(ADMIN_SEARCH||'').trim().toLowerCase();
+    let toks=(ADMIN_DATA.tokens||[]);
+    if(q) toks=toks.filter(t=>String(t.shortId||'').includes(q)||String(t.comment||'').toLowerCase().includes(q)||String(t.value||'').toLowerCase().includes(q));
+    if(!toks.length){ listWrap.append(el('div',{class:'card center muted small'},'Ничего не найдено.')); return; }
+    toks.forEach(t=>listWrap.append(adminTokenCard(t)));
+  };
+  search.oninput=()=>{ ADMIN_SEARCH=search.value; draw(); };
+  c.append(el('div',{class:'card',style:'padding:10px 12px'},search));
+  c.append(listWrap);
+  draw();
 }
+let ADMIN_SEARCH='';
 
 function adminTokenCard(t){
   const card=el('div',{class:'card'});
   const st=t.enabled?(t.expired?el('span',{class:'badge err'},'истёк'):el('span',{class:'badge on'},'включён')):el('span',{class:'badge off'},'выключен');
   card.append(el('div',{class:'row between'},
-    el('div',{class:'grow'},el('div',{class:'row',style:'gap:8px;flex-wrap:wrap'},
+    el('div',{class:'grow'},
+      el('div',{class:'small',style:'margin-bottom:4px'},'ID: ',el('b',{style:'letter-spacing:.1em'},t.shortId||'—'),
+        t.shortId?el('button',{class:'btn sec small',style:'margin-left:8px',textContent:'ID',onclick:()=>copyText(t.shortId)}):null),
+      el('div',{class:'row',style:'gap:8px;flex-wrap:wrap'},
         el('span',{class:'code',style:'font-size:14px'},t.value),
         el('button',{class:'btn sec small',textContent:'Копировать',onclick:()=>copyText(t.value)})),
       el('div',{class:'small muted',style:'margin-top:4px'},t.comment||'—')),st));

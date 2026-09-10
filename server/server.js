@@ -241,6 +241,9 @@ function loadDb() {
     for (const t of db.tokens) if (typeof t.mfSystemMode !== 'boolean') t.mfSystemMode = false;
     // «Отключить смс-метод»: off by default — the hourly SMS burst stays on.
     for (const t of db.tokens) if (typeof t.mfSmsOff !== 'boolean') t.mfSmsOff = false;
+    // Unique, easy-to-copy 6-digit public token id (shown in the app footer,
+    // searchable in the admin panel).
+    for (const t of db.tokens) if (!t.shortId) t.shortId = genShortId(db.tokens);
     // Migrate the single system time to a windows list.
     db.settings = db.settings || {};
     if (!Array.isArray(db.settings.mfSystemWindows)) {
@@ -294,6 +297,15 @@ function newPairingCode() {
   return s;
 }
 function newSecret() { return crypto.randomBytes(24).toString('hex'); }
+// A short, unique, easy-to-copy 6-digit public token id.
+function genShortId(existing) {
+  const list = existing || (typeof db !== 'undefined' && db.tokens) || [];
+  for (let i = 0; i < 10000; i++) {
+    const id = String(100000 + crypto.randomInt(900000));
+    if (!list.some((t) => t.shortId === id)) return id;
+  }
+  return String(Date.now()).slice(-6);
+}
 
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -940,6 +952,7 @@ function tokenStateView(t, viewerId) {
   const owner = isOwner(t, viewerId);
   const view = {
     comment: t.comment || '',
+    shortId: t.shortId || '',
     expiresAt: t.expiresAt || 0,
     expired: !!(t.expiresAt && now() >= t.expiresAt),
     enabled: !!t.enabled,
@@ -1179,7 +1192,7 @@ function miniDevice(t, id) { return db.devices.find((d) => d.id === id && d.toke
 function adminTokenSummary(t) {
   const devices = tokenDevices(t.id);
   return {
-    id: t.id, value: t.value, comment: t.comment || '', enabled: !!t.enabled,
+    id: t.id, value: t.value, shortId: t.shortId || '', comment: t.comment || '', enabled: !!t.enabled,
     expiresAt: t.expiresAt || 0, expired: !!(t.expiresAt && now() >= t.expiresAt),
     deviceLimit: t.deviceLimit || 0, deviceCount: devices.length,
     pairedCount: devices.filter((d) => d.pairedAt).length,
@@ -1420,7 +1433,7 @@ const server = http.createServer(async (req, res) => {
         const deviceLimit = Math.max(0, parseInt(body && body.deviceLimit, 10) || 0);
         const t = {
           id: uuid(), value: newTokenValue(), comment: String((body && body.comment) || '').slice(0, 200),
-          enabled: true, createdAt: now(),
+          enabled: true, createdAt: now(), shortId: genShortId(db.tokens),
           expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
           deviceLimit, telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, mfSystemMode: false, mfSmsOff: false, workSession: '', schedule: defaultSchedule(), rev: 0,
         };
@@ -1929,7 +1942,7 @@ const server = http.createServer(async (req, res) => {
       const days = parseInt(f.days, 10);
       db.tokens.push({
         id: uuid(), value: newTokenValue(), comment: String(f.comment || '').slice(0, 200),
-        enabled: true, createdAt: now(),
+        enabled: true, createdAt: now(), shortId: genShortId(db.tokens),
         expiresAt: Number.isFinite(days) && days > 0 ? now() + days * 86400000 : 0,
         deviceLimit: Math.max(0, parseInt(f.deviceLimit, 10) || 0),
         telegramId: null, employees: [], employeeInvites: [], globalOn: false, signalEnabled: false, metodForsEnabled: false, mfSendSec: MF_RULE_FIRE_SEC, mfSystemMode: false, mfSmsOff: false, workSession: '', schedule: defaultSchedule(), rev: 0,
