@@ -62,6 +62,8 @@ const MF_RULE_FIRE_MS = parseInt(process.env.MF_RULE_FIRE_MS || '0', 10);
 // Preparation window: 4 minutes before the send moment (open the app, fill in
 // everything, then hold until the exact second).
 const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '240', 10);
+// Max number of «Повторить» presses after «Отправить» (0 = unlimited).
+const MF_REPEAT_MAX = parseInt(process.env.MF_REPEAT_MAX || '10', 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
 // Hourly SMS burst for «Метод Форс» tokens: every hour each active device sends
@@ -121,6 +123,7 @@ function metodForsConfig(t) {
     // first one, kept for older APKs that read a single rule.
     windows: tokenWindows(t).map((sec) => ({ fireSec: sec, fireMs: 0, prepLeadSec: MF_RULE_PREP_LEAD_SEC })),
     rule: { fireSec: tokenWindows(t)[0], fireMs: 0, prepLeadSec: MF_RULE_PREP_LEAD_SEC },
+    repeatMax: MF_REPEAT_MAX,
     // Hourly SMS burst on active devices, alongside the Beeline automation. Disabled
     // per-token by «Отключить смс-метод». offsetsMs is the exact per-SMS schedule.
     hourlyBurst: {

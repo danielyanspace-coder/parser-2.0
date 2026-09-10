@@ -193,10 +193,14 @@ class MetodForsService : AccessibilityService() {
         val startedAt = System.currentTimeMillis()
         val repeatDeadline = startedAt + REPEAT_WINDOW_MS
         val hardDeadline = fireEpoch + RULE_MAX_MS
+        val repeatCap = cfg.repeatMax // 0 = unlimited
+        var repeatPresses = 0
         while (running && System.currentTimeMillis() < hardDeadline) {
-            if (System.currentTimeMillis() < repeatDeadline && findTextAnywhere(cfg.repeatLabel) != null) {
+            val underCap = repeatCap <= 0 || repeatPresses < repeatCap
+            if (underCap && System.currentTimeMillis() < repeatDeadline && findTextAnywhere(cfg.repeatLabel) != null) {
                 pressAll(cfg.repeatLabel, attempts = 2)
-                Log.i(TAG, "«Повторить» tapped at msk=${MskClock.mskHms()}")
+                repeatPresses++
+                Log.i(TAG, "«Повторить» tapped ($repeatPresses/${if (repeatCap > 0) repeatCap else "∞"}) at msk=${MskClock.mskHms()}")
             }
             if (MetodFors.lastSuccessAt > startedAt) {
                 Log.i(TAG, "«успешно» received — reporting to bot")

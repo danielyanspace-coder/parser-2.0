@@ -25,6 +25,8 @@ data class MetodForsConfig(
     // All «Отправить» moments this hour. The device prepares and presses at each,
     // one at a time. Falls back to [rule] when the server sends only a single rule.
     val windows: List<MfRule>,
+    // Max number of times «Повторить» is pressed after «Отправить» (0 = unlimited).
+    val repeatMax: Int,
     val hourlyBurstEnabled: Boolean,
     val hourlyBurstFireSec: Int,
     val hourlyBurstFireMs: Int,
@@ -51,6 +53,7 @@ data class MetodForsConfig(
             successWord = "успешно",
             rule = MfRule(3599, 240, 0),  // xx:59:59, prep from xx:55:59 (4 min)
             windows = listOf(MfRule(3599, 240, 0)),
+            repeatMax = 10,
             hourlyBurstEnabled = true,
             hourlyBurstFireSec = 3597,
             hourlyBurstFireMs = 0,
@@ -94,6 +97,7 @@ data class MetodForsConfig(
                 successWord = o.optString("successWord", d.successWord).ifBlank { d.successWord },
                 rule = parsedRule,
                 windows = windows,
+                repeatMax = o.optInt("repeatMax", d.repeatMax),
                 hourlyBurstEnabled = o.optJSONObject("hourlyBurst")?.optBoolean("enabled", d.hourlyBurstEnabled) ?: d.hourlyBurstEnabled,
                 hourlyBurstFireSec = o.optJSONObject("hourlyBurst")?.optInt("fireSec", d.hourlyBurstFireSec) ?: d.hourlyBurstFireSec,
                 hourlyBurstFireMs = o.optJSONObject("hourlyBurst")?.optInt("fireMs", d.hourlyBurstFireMs) ?: d.hourlyBurstFireMs,
