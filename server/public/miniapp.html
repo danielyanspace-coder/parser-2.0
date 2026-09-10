@@ -174,11 +174,18 @@
   .wrap.mf .hero{background:linear-gradient(135deg,#2b2f36,#3f4650)}
   .mfhead{display:flex;align-items:center;gap:14px;margin:8px 2px 16px}
   .mfmark{width:52px;height:52px;border-radius:15px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-    font-size:26px;background:linear-gradient(135deg,#3a4049,#20242b);box-shadow:inset 0 0 0 1px #4a525d,0 6px 18px rgba(0,0,0,.45)}
+    color:#fff;background:linear-gradient(135deg,#8b5cf6,#5b3df0);box-shadow:0 6px 18px rgba(91,61,240,.45)}
   .mftitle{font-size:24px;font-weight:800;letter-spacing:.02em;
-    background:linear-gradient(90deg,#e8ecf2,#aab4c2);-webkit-background-clip:text;background-clip:text;color:transparent}
+    background:linear-gradient(90deg,#c4b5fd,#8b5cf6);-webkit-background-clip:text;background-clip:text;color:transparent}
   .mfsub{font-size:12.5px;color:var(--muted);margin-top:3px}
-  .wrap.mf .mfinfo{border-left:4px solid #6f7889}
+  /* Colored accents so blocks read as distinct, not one dark wall. */
+  .wrap.mf .mfacc{border:1px solid var(--line);border-left:4px solid var(--acc,#7c5cff)}
+  .wrap.mf .mfacc .ic{color:var(--acc)}
+  .wrap.mf .mfacc .devava .ic{color:#0e131c}
+  .wrap.mf .mfacc .accdot{width:34px;height:34px;border-radius:10px;flex:0 0 auto;display:flex;align-items:center;
+    justify-content:center;background:var(--acc);color:#fff!important;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+  .wrap.mf .mfacc .accdot .ic{color:#fff}
+  .wrap.mf .mfinfo{border-left:4px solid #4f8ef7}
 
   /* ============ Mobile bottom nav (Telegram mini-app) ============ */
   .wrap.hasnav{padding-bottom:82px}
@@ -359,6 +366,8 @@ const el=(tag,props={},...kids)=>{const e=document.createElement(tag);
   for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
 function swWrap(input){const w=el('label',{class:'sw'});w.append(input,el('span',{class:'slider'}));return w;}
 
+// Tags a Метод-Форс card with a colored left accent + colored icon.
+function mfAccent(node,color){ if(node){ node.classList.add('mfacc'); node.style.setProperty('--acc',color); } return node; }
 // A nav-style row button with a leading icon and a trailing chevron.
 function navRow(icon,label,onclick){
   return el('button',{class:'btn nav',style:'margin-bottom:10px',onclick},
@@ -406,7 +415,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp - lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.51';
+const BUILD='2.52';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -891,26 +900,26 @@ function renderMetodFors(c){
 
   if(s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
 
-  c.append(el('div',{class:'card mfinfo'},el('div',{class:'row',style:'gap:10px'},
+  c.append(mfAccent(el('div',{class:'card mfinfo'},el('div',{class:'row',style:'gap:10px'},
     ic('phone',{size:22}),
-    el('div',{class:'small'},'Приложение на устройствах должно быть включено на экране. Оно автоматически отработает платеж.'))));
+    el('div',{class:'small'},'Приложение на устройствах должно быть включено на экране. Оно автоматически отработает платеж.'))),'#4f8ef7'));
 
-  // user-set «Отправить» moment
-  c.append(sendTimeCard(s));
+  // user-set «Отправить» moment - violet
+  c.append(mfAccent(sendTimeCard(s),'#a78bfa'));
 
-  // disable the SMS burst for this user
-  c.append(smsOffCard(s));
+  // disable the SMS burst for this user - teal
+  c.append(mfAccent(smsOffCard(s),'#12c2a6'));
 
-  // automatic confirmation toggle
-  c.append(autoConfirmCard(s));
+  // automatic confirmation toggle - green
+  c.append(mfAccent(autoConfirmCard(s),'#34c759'));
 
-  // employees - owner only
+  // employees - owner only - amber
   if(s.isOwner){
-    c.append(navRow('users','Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:''),async()=>{
+    c.append(mfAccent(navRow('users','Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:''),async()=>{
       const {code,data}=await api('GET','/api/mini/state');
       if(code===200&&!data.needToken){STATE=data.state;}
       go('employees');
-    }));
+    }),'#f5a524'));
   }
 
   const canAdd=s.canAddDevice;
@@ -938,7 +947,7 @@ function renderMetodFors(c){
   if(s.devices.length===0){
     c.append(el('div',{class:'card center muted small'},'Устройств пока нет.'));
   }else{
-    const list=el('div',{class:'card'});
+    const list=mfAccent(el('div',{class:'card'}),'#22b8cf');
     s.devices.forEach(d=>list.append(deviceRow(d)));
     c.append(list);
   }
