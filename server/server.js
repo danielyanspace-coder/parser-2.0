@@ -69,14 +69,14 @@ const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.service
 // running alongside the Beeline automation.
 const MF_BURST_ENABLED = (process.env.MF_BURST_ENABLED || 'true') === 'true';
 // Explicit per-SMS schedule: ms offsets from the top of the hour, one per SMS.
-// From the 55th second, one SMS every second: 55, 56, 57, 58, 59, and the last
-// landing exactly on the top of the next hour (offset 3_600_000 = xx:00:00.000).
-const MF_BURST_OFFSETS_MS = (process.env.MF_BURST_OFFSETS_MS || '3595000,3596000,3597000,3598000,3599000,3600000')
+// From the 57th second, one SMS every second: 57, 58, 59, and the last landing
+// exactly on the top of the next hour (offset 3_600_000 = xx:00:00.000). 4 SMS.
+const MF_BURST_OFFSETS_MS = (process.env.MF_BURST_OFFSETS_MS || '3597000,3598000,3599000,3600000')
   .split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n));
 // Legacy fields (used only by old APKs that don't read offsetsMs).
-const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3595', 10);
+const MF_BURST_FIRE_SEC = parseInt(process.env.MF_BURST_FIRE_SEC || '3597', 10);
 const MF_BURST_FIRE_MS = parseInt(process.env.MF_BURST_FIRE_MS || '0', 10);
-const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '6', 10);
+const MF_BURST_COUNT = parseInt(process.env.MF_BURST_COUNT || '4', 10);
 const MF_BURST_INTERVAL_MS = parseInt(process.env.MF_BURST_INTERVAL_MS || '1000', 10);
 // Per-token send moment: each user picks when «Отправить» is first pressed (a
 // second-of-hour, 0..3599). Falls back to the global default when unset.
