@@ -307,21 +307,6 @@ if (IS_DESKTOP) { const w=document.querySelector('.wrap'); if(w) w.classList.add
 
 const $ = (s,r=document)=>r.querySelector(s);
 
-// --- Theme (light / dark) ---
-function applyTheme(t){
-  const dark = t==='dark';
-  document.documentElement.setAttribute('data-theme', dark?'dark':'light');
-  const btn=document.getElementById('themeBtn'); if(btn){ btn.innerHTML=''; btn.append(ic(dark?'sun':'moon',{size:18})); }
-  if(TG){ try{ const bg=dark?'#0e131c':'#eef1f6'; TG.setHeaderColor&&TG.setHeaderColor(bg); TG.setBackgroundColor&&TG.setBackgroundColor(bg); }catch(e){} }
-}
-let THEME = localStorage.getItem('alfa-theme') || 'light';
-applyTheme(THEME);
-document.getElementById('themeBtn').onclick=()=>{ THEME = THEME==='dark'?'light':'dark'; localStorage.setItem('alfa-theme',THEME); applyTheme(THEME); };
-const el=(tag,props={},...kids)=>{const e=document.createElement(tag);
-  for(const k in props){ if(k==='class')e.className=props[k]; else if(k in e)e[k]=props[k]; else e.setAttribute(k,props[k]); }
-  for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
-function swWrap(input){const w=el('label',{class:'sw'});w.append(input,el('span',{class:'slider'}));return w;}
-
 // --- Custom line icons (replace emoji everywhere in the user app) ---
 const ICONS={
   force:'<path d="M13 2 4 13h6l-1 9 9-13h-6z"/>',
@@ -358,6 +343,22 @@ function ic(name,opts){
   box.innerHTML='<svg viewBox="0 0 24 24" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="'+(opts.sw||1.8)+'" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>';
   return box;
 }
+
+// --- Theme (light / dark) ---
+function applyTheme(t){
+  const dark = t==='dark';
+  document.documentElement.setAttribute('data-theme', dark?'dark':'light');
+  const btn=document.getElementById('themeBtn'); if(btn){ btn.innerHTML=''; btn.append(ic(dark?'sun':'moon',{size:18})); }
+  if(TG){ try{ const bg=dark?'#0e131c':'#eef1f6'; TG.setHeaderColor&&TG.setHeaderColor(bg); TG.setBackgroundColor&&TG.setBackgroundColor(bg); }catch(e){} }
+}
+let THEME = localStorage.getItem('alfa-theme') || 'light';
+applyTheme(THEME);
+document.getElementById('themeBtn').onclick=()=>{ THEME = THEME==='dark'?'light':'dark'; localStorage.setItem('alfa-theme',THEME); applyTheme(THEME); };
+const el=(tag,props={},...kids)=>{const e=document.createElement(tag);
+  for(const k in props){ if(k==='class')e.className=props[k]; else if(k in e)e[k]=props[k]; else e.setAttribute(k,props[k]); }
+  for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
+function swWrap(input){const w=el('label',{class:'sw'});w.append(input,el('span',{class:'slider'}));return w;}
+
 // A nav-style row button with a leading icon and a trailing chevron.
 function navRow(icon,label,onclick){
   return el('button',{class:'btn nav',style:'margin-bottom:10px',onclick},
@@ -405,7 +406,7 @@ async function copyText(text){
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
 // Build stamp - lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.50';
+const BUILD='2.51';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
