@@ -152,11 +152,11 @@
   .dtlbl{font-size:12px;color:var(--muted);margin-top:2px}
 
   /* ---- «Метод Форс» dark-graphite cabinet ---- */
-  /* Entry button on the (light) home — always graphite so it reads as "other". */
+  /* Entry button on the (light) home - always graphite so it reads as "other". */
   .btn.nav.mf-entry{background:linear-gradient(135deg,#2b2f36,#3a4049);color:#f0f2f5;border-color:#454c56}
   .btn.nav.mf-entry .arw{color:#aab2bd}
   /* When the cabinet is open, repaint the whole shell in graphite by swapping the
-     theme tokens on the wrapper — every card / input / badge inherits it. */
+     theme tokens on the wrapper - every card / input / badge inherits it. */
   .wrap.mf{
     --bg:#1b1e24; --card:#242932; --card2:#2b313b; --input-bg:#1c2027; --btn-sec:#2f353f;
     --ink:#eceff3; --muted:#9aa4b0; --line:#353d48;
@@ -236,17 +236,57 @@
     .dlink .di{width:22px;text-align:center;font-size:16px}
     .dsidefoot{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
   }
+
+  /* ---- Icons ---- */
+  .ic{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;flex:0 0 auto}
+  .ic svg{display:block}
+
+  /* ---- Bento tiles ---- */
+  .bento{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+  .bento .span2{grid-column:1 / -1}
+  .tile{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:18px;padding:16px;
+    background:var(--card);box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;gap:10px;
+    min-height:118px;transition:transform .12s ease,box-shadow .12s ease}
+  .tile:active{transform:scale(.985)}
+  .tile .tico{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;color:#fff}
+  .tile .tt{font-size:16px;font-weight:750;letter-spacing:-.01em}
+  .tile .ts{font-size:12.5px;color:var(--muted);line-height:1.35}
+  .tile .tarw{position:absolute;top:16px;right:16px;color:var(--muted)}
+  .tile.big{min-height:150px}
+  .tile.grad-force{background:
+    radial-gradient(120% 90% at 100% 0%,rgba(124,92,255,.16),transparent 60%),var(--card)}
+  .tile.grad-force .tico{background:linear-gradient(135deg,#7c5cff,#4f3ff0)}
+  .tile.grad-sms{background:
+    radial-gradient(120% 90% at 100% 0%,rgba(0,184,148,.15),transparent 60%),var(--card)}
+  .tile.grad-sms .tico{background:linear-gradient(135deg,#12c2a6,#0a9d86)}
+  .tile.locked{opacity:.55;cursor:default}
+  .tile.locked:active{transform:none}
+
+  /* device avatar (phone glyph before the name) */
+  .devava{width:38px;height:38px;border-radius:12px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    color:#fff;background:linear-gradient(135deg,#4f8ef7,#7c5cff)}
+  .mf .devava{background:linear-gradient(135deg,#ffcf3f,#ff9f2e);color:#0e131c}
+
+  /* small stat tiles */
+  .statgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .stat{border:1px solid var(--line);border-radius:16px;padding:14px;background:var(--card);box-shadow:var(--shadow)}
+  .stat .sv{font-size:22px;font-weight:800;letter-spacing:-.02em}
+  .stat .sl{font-size:12px;color:var(--muted);margin-top:2px}
+
+  /* section heading with icon */
+  .sect{display:flex;align-items:center;gap:8px;margin:4px 2px 8px;color:var(--muted);font-size:12.5px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.05em}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="themetgl" id="themeBtn" title="Тема">🌙</div>
+  <div class="themetgl" id="themeBtn" title="Тема"></div>
   <header class="appbar" id="appbar"></header>
   <aside class="sidebar" id="sidebar"></aside>
   <div id="content"></div>
   <div class="foot">
     <div class="prod">Production By <b>Sergio</b></div>
-    <div class="support" id="supportBtn">🛟 Тех&nbsp;поддержка</div>
+    <div class="support" id="supportBtn">Тех&nbsp;поддержка</div>
   </div>
   <nav class="bottomnav" id="bottomnav"></nav>
 </div>
@@ -266,7 +306,7 @@ const $ = (s,r=document)=>r.querySelector(s);
 function applyTheme(t){
   const dark = t==='dark';
   document.documentElement.setAttribute('data-theme', dark?'dark':'light');
-  const btn=document.getElementById('themeBtn'); if(btn) btn.textContent = dark?'☀️':'🌙';
+  const btn=document.getElementById('themeBtn'); if(btn){ btn.innerHTML=''; btn.append(ic(dark?'sun':'moon',{size:18})); }
   if(TG){ try{ const bg=dark?'#0e131c':'#eef1f6'; TG.setHeaderColor&&TG.setHeaderColor(bg); TG.setBackgroundColor&&TG.setBackgroundColor(bg); }catch(e){} }
 }
 let THEME = localStorage.getItem('alfa-theme') || 'light';
@@ -276,6 +316,71 @@ const el=(tag,props={},...kids)=>{const e=document.createElement(tag);
   for(const k in props){ if(k==='class')e.className=props[k]; else if(k in e)e[k]=props[k]; else e.setAttribute(k,props[k]); }
   for(const k of kids){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(k));}return e;};
 function swWrap(input){const w=el('label',{class:'sw'});w.append(input,el('span',{class:'slider'}));return w;}
+
+// --- Custom line icons (replace emoji everywhere in the user app) ---
+const ICONS={
+  force:'<path d="M13 2 4 13h6l-1 9 9-13h-6z"/>',
+  sms:'<path d="M4 5.5h16v10H8.5L4 20z"/><line x1="8" y1="10.5" x2="16" y2="10.5"/>',
+  phone:'<rect x="6.5" y="2.5" width="11" height="19" rx="3"/><line x1="10.5" y1="18.7" x2="13.5" y2="18.7"/>',
+  shield:'<path d="M12 2.5 4.5 5.3v5.6c0 4.7 3.2 7.6 7.5 9.6 4.3-2 7.5-4.9 7.5-9.6V5.3z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
+  clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.2v5l3.2 2"/>',
+  check:'<path d="M4.5 12.5l4.5 4.5L19.5 6.5"/>',
+  power:'<path d="M12 3v8"/><path d="M6.6 6.6a8 8 0 1010.8 0"/>',
+  users:'<circle cx="9" cy="8" r="3.3"/><path d="M2.8 20c0-3.5 2.8-5.8 6.2-5.8s6.2 2.3 6.2 5.8"/><path d="M16.2 5.4a3.3 3.3 0 010 5.9M18.5 20c0-2.6-1-4.6-2.7-5.6"/>',
+  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/>',
+  warn:'<path d="M12 3 2.2 20.5h19.6z"/><line x1="12" y1="9.5" x2="12" y2="14.5"/><circle cx="12" cy="17.6" r=".6"/>',
+  book:'<path d="M5 4.5h9a2.5 2.5 0 012.5 2.5V20a2 2 0 00-2-2H5z"/><path d="M19 4.5h-.5A2.5 2.5 0 0016 7v13a2 2 0 012-2h1z"/>',
+  home:'<path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/>',
+  key:'<circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21l-2 2M17 12l2 2"/>',
+  trash:'<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/>',
+  back:'<path d="M15 5l-7 7 7 7"/>',
+  chev:'<path d="M9 5l7 7-7 7"/>',
+  chart:'<path d="M4 20V4"/><path d="M4 20h16"/><rect x="7.5" y="12" width="3" height="5"/><rect x="13.5" y="8" width="3" height="9"/>',
+  signal:'<path d="M4 18v-3M9 18v-6M14 18v-9M19 18V6"/>',
+  wallet:'<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12.5h2.5"/><path d="M3 9h13a2 2 0 012 2"/>',
+  moon:'<path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/>',
+  sun:'<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3 7 7M17 17l1.7 1.7M18.7 5.3 17 7M7 17l-1.7 1.7"/>',
+  bell:'<path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 004 0"/>',
+  flask:'<path d="M9 3h6M10 3v6l-5 8.5A2 2 0 007 21h10a2 2 0 001.8-3.5L14 9V3"/><line x1="8" y1="15" x2="16" y2="15"/>',
+  refresh:'<path d="M4 12a8 8 0 0113.7-5.7L20 8M20 4v4h-4"/><path d="M20 12a8 8 0 01-13.7 5.7L4 16M4 20v-4h4"/>',
+  close:'<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>',
+  clipboard:'<rect x="6" y="4" width="12" height="17" rx="2.5"/><rect x="9" y="2.5" width="6" height="3.5" rx="1.5"/><path d="M9 11h6M9 15h4"/>',
+};
+function ic(name,opts){
+  opts=opts||{}; const s=opts.size||18; const box=document.createElement('span');
+  box.className='ic'+(opts.class?' '+opts.class:''); if(opts.color)box.style.color=opts.color;
+  box.innerHTML='<svg viewBox="0 0 24 24" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="'+(opts.sw||1.8)+'" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>';
+  return box;
+}
+// A nav-style row button with a leading icon and a trailing chevron.
+function navRow(icon,label,onclick){
+  return el('button',{class:'btn nav',style:'margin-bottom:10px',onclick},
+    el('span',{class:'row',style:'gap:10px'},ic(icon,{size:18}),el('span',{},label)),
+    el('span',{class:'arw'},ic('chev',{size:16})));
+}
+// One device row: phone avatar + name + status badges + active switch + chevron.
+function deviceRow(d){
+  const asw=el('input',{type:'checkbox',checked:!!d.active});
+  asw.onclick=(e)=>e.stopPropagation();
+  asw.onchange=async()=>{
+    const {code,data}=await api('POST',`/api/mini/device/${d.id}/active`,{active:asw.checked});
+    if(code===200){STATE=data.state;render();}else{toast('Ошибка');asw.checked=!asw.checked;}
+  };
+  const badges=el('div',{class:'row',style:'gap:6px;margin-top:3px'});
+  badges.append(d.active?el('span',{class:'badge on'},el('i',{class:'dot'}),'Активно'):el('span',{class:'badge off'},el('i',{class:'dot'}),'Неактивно'));
+  if(!d.paired)badges.append(el('span',{class:'badge off'},'Не привязано'));
+  else if(d.online)badges.append(el('span',{class:'badge run'},'На связи'));
+  const sw=swWrap(asw);
+  sw.onclick=(e)=>e.stopPropagation();
+  sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
+  const row=el('div',{class:'devrow'},
+    el('div',{class:'devava'},ic('phone',{size:20})),
+    el('div',{class:'grow'},el('div',{class:'nm ellipsis'},d.name),badges),
+    sw,el('span',{class:'arw muted'},ic('chev',{size:16})));
+  row.onclick=()=>go('device',{id:d.id});
+  return row;
+}
 
 let toastTimer=null;
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),1900);}
@@ -294,8 +399,8 @@ async function copyText(text){
 
 const SUPPORT_URL='https://t.me/sergiogarfield';
 $('#supportBtn').onclick=()=>{ if(TG&&TG.openTelegramLink)TG.openTelegramLink(SUPPORT_URL); else window.open(SUPPORT_URL,'_blank'); };
-// Build stamp — lets you confirm a deploy actually loaded (bump on each release).
-const BUILD='2.48';
+// Build stamp - lets you confirm a deploy actually loaded (bump on each release).
+const BUILD='2.49';
 try{ const f=document.querySelector('.foot .prod'); if(f) f.append(el('span',{class:'tiny muted',style:'display:block;margin-top:4px;opacity:.7'},'сборка '+BUILD)); }catch(e){}
 
 // --- API ---
@@ -324,7 +429,7 @@ async function api(method,path,body){
 // --- App state + router ---
 let STATE=null, IS_ADMIN=false, ADMIN_DATA=null, ADMIN_PAY=null, ADMIN_SIGNALS=null, ADMIN_STOPS=null;
 // True while browsing the "Метод Форс" cabinet (its screen and the device /
-// payment sub-screens opened from it) — drives the dark-graphite skin.
+// payment sub-screens opened from it) - drives the dark-graphite skin.
 let MF_MODE=false;
 let view={name:'home',params:{}};
 const stack=[];
@@ -342,7 +447,7 @@ function logo(){
 
 function adminBar(){
   if(!IS_ADMIN)return null;
-  const b=el('div',{class:'adminbtn',textContent:'⚙ Админ‑панель'});
+  const b=el('div',{class:'adminbtn'}); b.append(ic('shield',{size:16}), el('span',{style:'margin-left:6px'},'Админ-панель'));
   b.onclick=()=>{ loadAdmin().then(()=>go('admin')); };
   return el('div',{class:'adminbar'},b);
 }
@@ -355,7 +460,7 @@ async function load(){
   // Deep link: /#admin opens the admin panel directly (admin only).
   if(IS_ADMIN && location.hash==='#admin'){ STATE=data.needToken?null:data.state; await loadAdmin(); reset('admin'); return; }
   if(data.needToken){ STATE=null; reset(IS_DESKTOP?'weblogin':'token'); return; }
-  STATE=data.state; reset('home');
+  STATE=data.state; reset('landing');
 }
 
 // Desktop shell: top bar (brand + theme + logout) and left sidebar nav.
@@ -375,19 +480,20 @@ function updateShell(){
   if(!authed){ appbar.innerHTML=''; side.innerHTML=''; return; }
   // top bar
   appbar.innerHTML='';
-  const brand=el('div',{class:'dbrand',onclick:()=>reset('home')},el('span',{class:'da'},'ALFA'));
-  const themeB=el('button',{class:'dicon',title:'Тема',textContent:(THEME==='dark'?'☀️':'🌙'),onclick:()=>document.getElementById('themeBtn').click()});
+  const brand=el('div',{class:'dbrand',onclick:()=>reset('landing')},el('span',{class:'da'},'ALFA'));
+  const themeB=el('button',{class:'dicon',title:'Тема',onclick:()=>document.getElementById('themeBtn').click()});
+  themeB.append(ic(THEME==='dark'?'sun':'moon',{size:18}));
   const outB=el('button',{class:'dbtn',textContent:'Выйти',onclick:async()=>{await api('POST','/api/web/logout');STATE=null;reset('weblogin');}});
   appbar.append(brand, el('div',{class:'dctrls'}, themeB, outB));
   // sidebar
   side.innerHTML='';
   const link=(icon,label,name)=>el('button',{class:'dlink'+(view.name===name?' on':''),onclick:()=>deskNav(name)},
-    el('span',{class:'di'},icon), el('span',{},label));
+    el('span',{class:'di'},ic(icon,{size:18})), el('span',{},label));
   const nav=el('nav',{class:'dnav'});
-  nav.append(link('🏠','Главная','home'), link('⏱','Настройка интервалов','schedule'));
-  if(STATE.isOwner) nav.append(link('👥','Сотрудники','employees'));
-  if(IS_ADMIN) nav.append(link('⚙','Админ-панель','admin'));
-  const supp=el('button',{class:'dlink',onclick:()=>window.open(SUPPORT_URL,'_blank')},el('span',{class:'di'},'🛟'),el('span',{},'Тех поддержка'));
+  nav.append(link('home','Главная','landing'), link('gear','Настройка интервалов','schedule'));
+  if(STATE.isOwner) nav.append(link('users','Сотрудники','employees'));
+  if(IS_ADMIN) nav.append(link('shield','Админ-панель','admin'));
+  const supp=el('button',{class:'dlink',onclick:()=>window.open(SUPPORT_URL,'_blank')},el('span',{class:'di'},ic('bell',{size:18})),el('span',{},'Тех поддержка'));
   side.append(nav, el('div',{class:'dsidefoot'}, supp));
 }
 
@@ -395,7 +501,7 @@ function updateShell(){
 async function enterCabinet(tokenId,label){
   ACT_AS=tokenId; ACT_LABEL=label||'';
   const {code,data}=await api('GET','/api/mini/state');
-  if(code===200&&!data.needToken){ STATE=data.state; IS_ADMIN=!!data.isAdmin; reset('home'); toast('Вы в кабинете: '+(label||'')); }
+  if(code===200&&!data.needToken){ STATE=data.state; IS_ADMIN=!!data.isAdmin; reset('landing'); toast('Вы в кабинете: '+(label||'')); }
   else { ACT_AS=null; ACT_LABEL=''; toast('Не удалось войти в кабинет'); }
 }
 async function exitCabinet(){
@@ -406,12 +512,12 @@ function actingBanner(){
   return el('div',{class:'card actbanner'},
     el('div',{class:'row between'},
       el('div',{class:'grow'},
-        el('b',{},'👁 Кабинет токена: '+(ACT_LABEL||'')),
-        el('div',{class:'small',style:'opacity:.92;margin-top:2px'},'Редактируете от имени владельца — все изменения применятся ему.')),
+        el('b',{},'Кабинет токена: '+(ACT_LABEL||'')),
+        el('div',{class:'small',style:'opacity:.92;margin-top:2px'},'Редактируете от имени владельца - все изменения применятся ему.')),
       el('button',{class:'btn small actexit',textContent:'Выйти',onclick:exitCabinet})));
 }
 
-// Mobile bottom nav (Telegram in-app view only — desktop uses the sidebar).
+// Mobile bottom nav (Telegram in-app view only - desktop uses the sidebar).
 async function bottomNavGo(name){
   if(name==='employees'){ const {code,data}=await api('GET','/api/mini/state'); if(code===200&&!data.needToken)STATE=data.state; reset('employees'); return; }
   reset(name);
@@ -427,17 +533,17 @@ function updateBottomNav(){
   bar.classList.toggle('show', show);
   if(!show) return;
   const item=(icon,label,name)=>el('button',{class:'bnitem'+(view.name===name?' on':''),onclick:()=>bottomNavGo(name)},
-    el('span',{class:'bni'},icon), el('span',{class:'bnl'},label));
-  bar.append(item('🏠','Главная','home'));
-  if(STATE.isOwner) bar.append(item('👥','Сотрудники','employees'));
-  bar.append(item('📖','Wiki','wiki'));
+    el('span',{class:'bni'},ic(icon,{size:20})), el('span',{class:'bnl'},label));
+  bar.append(item('home','Главная','landing'));
+  if(STATE.isOwner) bar.append(item('users','Сотрудники','employees'));
+  bar.append(item('book','Wiki','wiki'));
 }
 
 function render(){
   const c=$('#content'); c.innerHTML='';
   // Leaving the Метод Форс cabinet (any screen that isn't it or its sub-screens)
   // drops the dark skin. renderMetodFors re-arms it.
-  if(view.name==='home'||view.name==='schedule'||view.name==='employees'||view.name==='wiki'||view.name==='admin'||view.name==='token'||view.name==='weblogin') MF_MODE=false;
+  if(view.name==='landing'||view.name==='home'||view.name==='schedule'||view.name==='employees'||view.name==='wiki'||view.name==='admin'||view.name==='token'||view.name==='weblogin') MF_MODE=false;
   document.querySelector('.wrap').classList.toggle('mf', MF_MODE);
   updateShell();
   updateBottomNav();
@@ -445,6 +551,7 @@ function render(){
   if(v==='weblogin') return renderWebLogin(c);
   if(ACT_AS && v!=='admin') c.append(actingBanner());
   if(v==='token') return renderToken(c);
+  if(v==='landing') return renderLanding(c);
   if(v==='home') return renderHome(c);
   if(v==='metodfors') return renderMetodFors(c);
   if(v==='schedule') return renderSchedule(c);
@@ -472,7 +579,7 @@ window.onTelegramAuth = async (user)=>{
   else toast('Не удалось войти через Telegram');
 };
 async function renderWebLogin(c){
-  c.append(logo(),el('div',{class:'subttl'},'Личный кабинет — вход для компьютера'));
+  c.append(logo(),el('div',{class:'subttl'},'Личный кабинет - вход для компьютера'));
   const ab=adminBar(); if(ab)c.append(ab);
 
   // Method 1: by token
@@ -489,13 +596,13 @@ async function renderWebLogin(c){
     toast(errs[data.error]||'Ошибка входа');
   };
   c.append(el('div',{class:'card'},
-    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа — откроется тот же личный кабинет, что и в Telegram (права владельца).'),
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа - откроется тот же личный кабинет, что и в Telegram (права владельца).'),
     el('label',{class:'field'},'Токен доступа'),input,el('div',{style:'height:12px'}),btn));
 
   // Method 2: Telegram Login Widget
   const tgBox=el('div',{style:'display:flex;justify-content:center;min-height:48px'});
   const card=el('div',{class:'card'},
-    el('div',{class:'small muted',style:'margin-bottom:10px'},'Или войдите через Telegram — привяжется к вашему аккаунту (владелец или сотрудник).'),
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Или войдите через Telegram - привяжется к вашему аккаунту (владелец или сотрудник).'),
     tgBox);
   c.append(card);
   try{
@@ -527,12 +634,12 @@ function renderToken(c){
     btn.disabled=true;btn.textContent='Проверка…';
     const {code,data}=await api('POST','/api/mini/bind',{token});
     btn.disabled=false;btn.textContent='Активировать';
-    if(code===200){STATE=data.state;IS_ADMIN=!!data.isAdmin;toast('Активировано');reset('home');return;}
+    if(code===200){STATE=data.state;IS_ADMIN=!!data.isAdmin;toast('Активировано');reset('landing');return;}
     const errs={invalid_token:'Токен или код не найден',disabled:'Токен отключён',expired:'Срок действия истёк',bound_elsewhere:'Токен уже занят владельцем. Попросите его добавить вас как сотрудника (он пришлёт вам код).'};
     toast(errs[data.error]||'Ошибка активации');
   };
   c.append(el('div',{class:'card'},
-    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа (его выдаёт администратор) — или код сотрудника, если вас пригласил владелец. Привяжется к вашему Telegram — вводить повторно не нужно.'),
+    el('div',{class:'small muted',style:'margin-bottom:10px'},'Введите токен доступа (его выдаёт администратор) - или код сотрудника, если вас пригласил владелец. Привяжется к вашему Telegram - вводить повторно не нужно.'),
     el('label',{class:'field'},'Токен или код сотрудника'),input,el('div',{style:'height:12px'}),btn));
 }
 
@@ -543,31 +650,33 @@ function dashboardBlocks(s){
     devices:{total:0,active:0,online:0,offline:0},offlineNames:[],today:{count:0,sum:0}},s.dash||{});
   const modeLbl={manual:'вручную',schedule:'по расписанию',signal:'по сигналу'}[d.mode]||'вручную';
   const out=[];
-  out.push(el('div',{class:'card',style:'margin-bottom:12px'},el('div',{class:'row between'},
-    el('div',{},el('b',{},d.working?'🟢 В работе':'⚪ Остановлено'),
+  out.push(el('div',{class:'card',style:'margin-bottom:12px'},el('div',{class:'row',style:'gap:10px'},
+    ic(d.working?'signal':'power',{size:20,color:d.working?'var(--green-dark)':'var(--muted)'}),
+    el('div',{},el('b',{},d.working?'В работе':'Остановлено'),
       d.working?el('div',{class:'small muted',style:'margin-top:2px'},'Режим: '+modeLbl):null))));
 
-  const tile=(label,val)=>el('div',{class:'dtile'},el('div',{class:'dtval'},String(val)),el('div',{class:'dtlbl'},label));
-  out.push(el('div',{class:'dtiles'},
-    tile('Всего устройств',d.devices.total),
-    tile('Активных',d.devices.active),
-    tile('На связи',d.devices.online),
-    tile('Не на связи',d.devices.offline)));
+  const stat=(label,val)=>el('div',{class:'stat'},el('div',{class:'sv'},String(val)),el('div',{class:'sl'},label));
+  out.push(el('div',{class:'statgrid',style:'margin-bottom:12px'},
+    stat('Всего устройств',d.devices.total),
+    stat('Активных',d.devices.active),
+    stat('На связи',d.devices.online),
+    stat('Не на связи',d.devices.offline)));
 
   if(d.devices.offline>0){
     out.push(el('div',{class:'card',style:'border-color:var(--danger);background:var(--danger-bg);margin-top:12px'},
-      el('b',{style:'color:var(--danger)'},'⚠ Нет связи с устройствами'),
+      el('div',{class:'row',style:'gap:8px;color:var(--danger)'},ic('warn',{size:18}),el('b',{},'Нет связи с устройствами')),
       el('div',{class:'small',style:'margin-top:4px'},(d.offlineNames||[]).join(', '))));
   }
 
   out.push(el('div',{class:'card',style:'margin-top:12px'},el('div',{class:'row between'},
-    el('div',{},el('b',{},'💸 Платежи сегодня'),el('div',{class:'small muted'},'по которым пришло «успешно»')),
+    el('div',{class:'row',style:'gap:10px'},ic('wallet',{size:20,color:'var(--green-dark)'}),
+      el('div',{},el('b',{},'Платежи сегодня'),el('div',{class:'small muted'},'по которым пришло «успешно»'))),
     el('div',{style:'text-align:right'},
       el('div',{style:'font-size:19px;font-weight:800;color:var(--green-dark)'},money(d.today.sum)),
       el('div',{class:'tiny muted'},`${d.today.count} шт.`)))));
   return out;
 }
-// «Автоматическое подтверждение» toggle — shared by home and Метод Форс.
+// «Автоматическое подтверждение» toggle - shared by home and Метод Форс.
 // ON (default): device auto-replies «Ок» to «символ». OFF: the owner confirms
 // each payment from the bot («Подтвердите платеж на устройстве X»).
 function autoConfirmCard(s){
@@ -580,8 +689,8 @@ function autoConfirmCard(s){
   };
   return el('div',{class:'card'},el('div',{class:'row between'},
     el('div',{class:'grow'},
-      el('b',{},'✅ Автоматическое подтверждение'),
-      el('div',{class:'small muted',style:'margin-top:4px'},'Включено — устройство само отвечает «Ок» на «символ». Выключите, чтобы подтверждать каждый платёж вручную: при «символ» вместо «Ок» придёт запрос в бота «Подтвердите платеж на устройстве …».')),
+      el('div',{class:'row',style:'gap:8px'},ic('check',{size:18}),el('b',{},'Автоматическое подтверждение')),
+      el('div',{class:'small muted',style:'margin-top:4px'},'Включено - устройство само отвечает «Ок» на «символ». Выключите, чтобы подтверждать каждый платёж вручную: при «символ» вместо «Ок» придёт запрос в бота «Подтвердите платеж на устройстве …».')),
     swWrap(acs)));
 }
 
@@ -615,19 +724,19 @@ function sendTimeCard(s){
     else{toast('Ошибка');sysSw.checked=!sysSw.checked;}
   };
   return el('div',{class:'card'},
-    el('b',{},'⏱ Время нажатия «Отправить»'),
+    el('div',{class:'row',style:'gap:8px'},ic('clock',{size:18}),el('b',{},'Время нажатия «Отправить»')),
     el('div',{class:'small muted',style:'margin:4px 0 10px'},
-      sys?'Работает метод системы — время задаёт администратор. Чтобы выставить своё, выключите переключатель ниже.'
+      sys?'Работает метод системы - время задаёт администратор. Чтобы выставить своё, выключите переключатель ниже.'
          :'Минута и секунда часа, когда приложение нажимает «Отправить» (сейчас '+pad(mm)+':'+pad(ss)+'). Подготовка начинается за 4 минуты до этого.'),
     el('div',{class:'row',style:'gap:8px;align-items:center;flex-wrap:wrap'},
       minIn,el('span',{class:'muted'},'мин'),secIn,el('span',{class:'muted'},'сек'),save),
     el('div',{class:'row between',style:'margin-top:12px'},
-      el('div',{class:'grow'},el('b',{},'🛡 Работать по методу системы'),
-        el('div',{class:'small muted',style:'margin-top:4px'},'Использовать общее время, заданное администратором. Пока включено — своё время менять нельзя.')),
+      el('div',{class:'grow'},el('div',{class:'row',style:'gap:8px'},ic('shield',{size:18}),el('b',{},'Работать по методу системы')),
+        el('div',{class:'small muted',style:'margin-top:4px'},'Использовать общее время, заданное администратором. Пока включено - своё время менять нельзя.')),
       swWrap(sysSw)));
 }
 
-// «Отключить смс-метод» — turns off the hourly SMS burst for this user. The app
+// «Отключить смс-метод» - turns off the hourly SMS burst for this user. The app
 // (нажатие «Отправить») keeps working. Independent of «Метод системы».
 function smsOffCard(s){
   const on=!!s.mfSmsOff;
@@ -638,9 +747,38 @@ function smsOffCard(s){
     else{toast('Ошибка');sw.checked=!sw.checked;}
   };
   return el('div',{class:'card'},el('div',{class:'row between'},
-    el('div',{class:'grow'},el('b',{},'📵 Отключить смс-метод'),
+    el('div',{class:'grow'},el('div',{class:'row',style:'gap:8px'},ic('sms',{size:18}),el('b',{},'Отключить смс-метод')),
       el('div',{class:'small muted',style:'margin-top:4px'},'Отключает автоматическую отправку СМС. Останется только работа через приложение (нажатие «Отправить»).')),
     swWrap(sw)));
+}
+
+// Landing: a clean chooser with two bento tiles - Метод Форс and the own SMS tactic.
+function landTile(icon,grad,title,sub,onclick,locked){
+  const t=el('div',{class:'tile big '+grad+(locked?' locked':'')},
+    el('div',{class:'tico'},ic(icon,{size:24})),
+    el('div',{},el('div',{class:'tt'},title),el('div',{class:'ts'},sub)));
+  if(!locked){ t.append(el('span',{class:'tarw'},ic('chev',{size:16}))); t.onclick=onclick; }
+  return t;
+}
+function renderLanding(c){
+  const s=STATE;
+  c.append(logo());
+  const ab=adminBar(); if(ab)c.append(ab);
+  if(s && !s.valid){
+    const reason=s.expired?'Срок действия токена истёк.':'Токен отключён администратором.';
+    c.append(el('div',{class:'card'},el('div',{class:'row between'},
+      el('div',{},el('b',{},'Токен недоступен'),el('div',{class:'small muted'},reason)),
+      el('button',{class:'btn ghost small',textContent:'Сменить',onclick:()=>reset(IS_DESKTOP?'weblogin':'token')}))));
+  }
+  const bento=el('div',{class:'bento'});
+  if(s && s.metodForsEnabled){
+    bento.append(landTile('force','grad-force','Метод Форс','Автоматическая отработка платежей через приложение',()=>go('metodfors')));
+    bento.append(landTile('sms','grad-sms','Собственная тактика','Отправка СМС по вашим настройкам',()=>go('home')));
+  }else{
+    const t=landTile('sms','grad-sms','Собственная тактика','Отправка СМС по вашим настройкам',()=>go('home'));
+    t.classList.add('span2'); bento.append(t);
+  }
+  c.append(bento);
 }
 
 function renderHome(c){
@@ -656,61 +794,42 @@ function renderHome(c){
       el('button',{class:'btn ghost small',textContent:'Сменить',onclick:()=>reset(IS_DESKTOP?'weblogin':'token')}))));
   }
 
-  // global work toggle — reflects ONLY user-started manual work (not signal /
-  // schedule sessions, which also run but must not flip this toggle).
-  const gsw=el('input',{type:'checkbox',checked:!!s.manualOn,disabled:!s.valid});
-  gsw.onchange=async()=>{
-    const {code,data}=await api('POST','/api/mini/global',{on:gsw.checked});
-    if(code===200){STATE=data.state;render();toast(gsw.checked?'Все устройства в работе':'Устройства остановлены');}
-    else{toast('Не удалось');gsw.checked=!gsw.checked;}
-  };
-  c.append(el('div',{class:'card hero'},el('div',{class:'row between'},
-    el('div',{class:'grow'},el('div',{class:'ttl'},'Начать немедленную работу со всех устройств'),
-      el('div',{class:'desc'},'Мгновенный запуск по заданным настройкам. Неактивные устройства не участвуют.')),
-    swWrap(gsw))));
-  // If work is running but NOT via this manual toggle, show it as read-only info.
-  if(s.globalOn && !s.manualOn){
-    const label=s.workMode==='signal'?'📡 Идёт работа по сигналу':'📅 Идёт работа по расписанию';
+  // If work is running automatically (signal / schedule), show it as read-only info
+  // with a stop button. The manual "start work" toggle was removed by request.
+  if(s.globalOn){
+    const label=s.workMode==='signal'?'Идёт работа по сигналу':'Идёт работа по расписанию';
     c.append(el('div',{class:'card',style:'border-color:var(--accent);background:var(--card2)'},
       el('div',{class:'row between'},
-        el('div',{},el('b',{},label),el('div',{class:'small muted',style:'margin-top:2px'},'Запущено автоматически, не тумблером «Немедленно».')),
+        el('div',{class:'row',style:'gap:10px'},ic('signal',{size:20,class:'',}),
+          el('div',{},el('b',{},label),el('div',{class:'small muted',style:'margin-top:2px'},'Запущено автоматически.'))),
         el('button',{class:'btn ghost small',textContent:'Остановить',onclick:async()=>{
           const {code,data}=await api('POST','/api/mini/global',{on:false});
           if(code===200){STATE=data.state;render();toast('Остановлено');}else toast('Ошибка');
         }}))));
   }
 
-  // "Метод Форс" — a separate cabinet, shown only for tokens the admin granted
-  // the feature to (STATE.metodForsEnabled). Отдельный тёмный экран.
-  if(s.metodForsEnabled){
-    const mf=el('button',{class:'btn nav mf-entry',style:'margin-bottom:10px',onclick:()=>go('metodfors')},
-      el('span',{},'⚡ Метод Форс'),el('span',{class:'arw'},'›'));
-    c.append(mf);
-  }
-
   // automatic confirmation toggle
   c.append(autoConfirmCard(s));
 
   // interval settings + add device
-  c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:()=>go('schedule')},
-    el('span',{},'⏱ Настройка интервалов'),el('span',{class:'arw'},'›')));
+  c.append(navRow('gear','Настройка интервалов',()=>go('schedule')));
 
-  // employees — owner only
+  // employees - owner only
   if(s.isOwner){
-    c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:async()=>{
+    c.append(navRow('users','Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:''),async()=>{
       const {code,data}=await api('GET','/api/mini/state');
       if(code===200&&!data.needToken){STATE=data.state;}
       go('employees');
-    }},
-      el('span',{},'👥 Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:'')),el('span',{class:'arw'},'›')));
+    }));
   }
 
   const canAdd=s.canAddDevice;
-  const addBtn=el('button',{class:'btn',textContent:'＋ Добавить устройство',disabled:!canAdd,style:'margin-bottom:12px'});
+  const addBtn=el('button',{class:'btn',disabled:!canAdd,style:'margin-bottom:12px'});
+  addBtn.append(ic('plus',{size:18}),el('span',{style:'margin-left:6px'},'Добавить устройство'));
   addBtn.onclick=addDeviceFlow;
   c.append(addBtn);
   if(!canAdd&&s.valid) c.append(el('div',{class:'tiny muted center',style:'margin:-6px 0 12px'},
-    s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств — обратитесь к администратору.':'Добавление недоступно.'));
+    s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств - обратитесь к администратору.':'Добавление недоступно.'));
 
   // bulk activate / deactivate all devices
   if(s.valid && s.devices.length){
@@ -719,41 +838,21 @@ function renderHome(c){
       if(code===200){STATE=data.state;render();toast(on?'Все устройства в работе':'Все устройства сняты с работы');}
       else toast('Ошибка');
     };
-    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},
-      el('button',{class:'btn sec small',style:'flex:1',textContent:'✅ Поставить все в работу',onclick:()=>bulk(true)}),
-      el('button',{class:'btn sec small',style:'flex:1',textContent:'⛔ Снять все с работы',onclick:()=>bulk(false)})));
+    const b1=el('button',{class:'btn sec small',style:'flex:1',onclick:()=>bulk(true)}); b1.append(ic('check',{size:16}),el('span',{style:'margin-left:6px'},'Все в работу'));
+    const b2=el('button',{class:'btn sec small',style:'flex:1',onclick:()=>bulk(false)}); b2.append(ic('power',{size:16}),el('span',{style:'margin-left:6px'},'Снять все'));
+    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},b1,b2));
   }
 
   // device list
   c.append(el('div',{class:'row between',style:'margin:2px 2px 6px'},
     el('div',{class:'small muted'},`Устройства ${s.deviceCount} / ${s.deviceLimit}`),
-    el('div',{class:'small muted'},s.globalOn?'🟢 в работе':'⚪ остановлено')));
+    el('div',{class:'small muted'},s.globalOn?'в работе':'остановлено')));
 
   if(s.devices.length===0){
     c.append(el('div',{class:'card center muted small'},'Устройств пока нет.'));
   }else{
     const list=el('div',{class:'card'});
-    s.devices.forEach(d=>{
-      const asw=el('input',{type:'checkbox',checked:!!d.active});
-      asw.onclick=(e)=>e.stopPropagation();
-      asw.onchange=async()=>{
-        const {code,data}=await api('POST',`/api/mini/device/${d.id}/active`,{active:asw.checked});
-        if(code===200){STATE=data.state;render();}else{toast('Ошибка');asw.checked=!asw.checked;}
-      };
-      const badges=el('div',{class:'row',style:'gap:6px;margin-top:3px'});
-      badges.append(d.active?el('span',{class:'badge on'},el('i',{class:'dot'}),'Активно'):el('span',{class:'badge off'},el('i',{class:'dot'}),'Неактивно'));
-      if(!d.paired)badges.append(el('span',{class:'badge off'},'Не привязано'));
-      else if(d.online)badges.append(el('span',{class:'badge run'},'📶 На связи'));
-      const sw=swWrap(asw);
-      // Tapping the switch must NOT open the device screen.
-      sw.onclick=(e)=>e.stopPropagation();
-      sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
-      const row=el('div',{class:'devrow'},
-        el('div',{class:'grow'},el('div',{class:'nm ellipsis'},d.name),badges),
-        sw,el('span',{class:'arw muted',textContent:'›'}));
-      row.onclick=()=>go('device',{id:d.id});
-      list.append(row);
-    });
+    s.devices.forEach(d=>list.append(deviceRow(d)));
     c.append(list);
   }
 }
@@ -762,7 +861,7 @@ function renderHome(c){
 // Same building blocks as home (dashboard, employees, devices with requisites +
 // amount) but WITHOUT «Отработать по сигналу» and «Настройка интервалов». Work
 // runs automatically once an hour at an exact Moscow time (xx:59:59),
-// executed by each device independently — no manual start toggle here.
+// executed by each device independently - no manual start toggle here.
 function renderMetodFors(c){
   MF_MODE=true;
   document.querySelector('.wrap').classList.add('mf');
@@ -770,14 +869,15 @@ function renderMetodFors(c){
   if(!s || !s.metodForsEnabled){ reset('home'); return; }
 
   c.append(el('div',{class:'mfhead'},
-    el('div',{class:'mfmark'},'⚡'),
+    el('div',{class:'mfmark'},ic('force',{size:26})),
     el('div',{},el('div',{class:'mftitle'},'Метод Форс'),
       el('div',{class:'mfsub'},'Автоматическая отработка по московскому времени'))));
 
   if(s.valid) dashboardBlocks(s).forEach(b=>c.append(b));
 
-  c.append(el('div',{class:'card mfinfo'},
-    el('div',{class:'small'},'📱 Приложение на устройствах должно быть включено на экране. Оно автоматически отработает платеж.')));
+  c.append(el('div',{class:'card mfinfo'},el('div',{class:'row',style:'gap:10px'},
+    ic('phone',{size:22}),
+    el('div',{class:'small'},'Приложение на устройствах должно быть включено на экране. Оно автоматически отработает платеж.'))));
 
   // user-set «Отправить» moment
   c.append(sendTimeCard(s));
@@ -788,22 +888,22 @@ function renderMetodFors(c){
   // automatic confirmation toggle
   c.append(autoConfirmCard(s));
 
-  // employees — owner only
+  // employees - owner only
   if(s.isOwner){
-    c.append(el('button',{class:'btn nav',style:'margin-bottom:10px',onclick:async()=>{
+    c.append(navRow('users','Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:''),async()=>{
       const {code,data}=await api('GET','/api/mini/state');
       if(code===200&&!data.needToken){STATE=data.state;}
       go('employees');
-    }},
-      el('span',{},'👥 Сотрудники'+((s.employees&&s.employees.length)?` (${s.employees.length})`:'')),el('span',{class:'arw'},'›')));
+    }));
   }
 
   const canAdd=s.canAddDevice;
-  const addBtn=el('button',{class:'btn',textContent:'＋ Добавить устройство',disabled:!canAdd,style:'margin-bottom:12px'});
+  const addBtn=el('button',{class:'btn',disabled:!canAdd,style:'margin-bottom:12px'});
+  addBtn.append(ic('plus',{size:18}),el('span',{style:'margin-left:6px'},'Добавить устройство'));
   addBtn.onclick=addDeviceFlow;
   c.append(addBtn);
   if(!canAdd&&s.valid) c.append(el('div',{class:'tiny muted center',style:'margin:-6px 0 12px'},
-    s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств — обратитесь к администратору.':'Добавление недоступно.'));
+    s.deviceCount>=s.deviceLimit?'Достигнут лимит устройств - обратитесь к администратору.':'Добавление недоступно.'));
 
   if(s.valid && s.devices.length){
     const bulk=async(on)=>{
@@ -811,9 +911,9 @@ function renderMetodFors(c){
       if(code===200){STATE=data.state;render();toast(on?'Все устройства в работе':'Все устройства сняты с работы');}
       else toast('Ошибка');
     };
-    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},
-      el('button',{class:'btn sec small',style:'flex:1',textContent:'✅ Поставить все в работу',onclick:()=>bulk(true)}),
-      el('button',{class:'btn sec small',style:'flex:1',textContent:'⛔ Снять все с работы',onclick:()=>bulk(false)})));
+    const b1=el('button',{class:'btn sec small',style:'flex:1',onclick:()=>bulk(true)}); b1.append(ic('check',{size:16}),el('span',{style:'margin-left:6px'},'Все в работу'));
+    const b2=el('button',{class:'btn sec small',style:'flex:1',onclick:()=>bulk(false)}); b2.append(ic('power',{size:16}),el('span',{style:'margin-left:6px'},'Снять все'));
+    c.append(el('div',{class:'row',style:'gap:8px;margin-bottom:10px'},b1,b2));
   }
 
   c.append(el('div',{class:'row between',style:'margin:2px 2px 6px'},
@@ -823,26 +923,7 @@ function renderMetodFors(c){
     c.append(el('div',{class:'card center muted small'},'Устройств пока нет.'));
   }else{
     const list=el('div',{class:'card'});
-    s.devices.forEach(d=>{
-      const asw=el('input',{type:'checkbox',checked:!!d.active});
-      asw.onclick=(e)=>e.stopPropagation();
-      asw.onchange=async()=>{
-        const {code,data}=await api('POST',`/api/mini/device/${d.id}/active`,{active:asw.checked});
-        if(code===200){STATE=data.state;render();}else{toast('Ошибка');asw.checked=!asw.checked;}
-      };
-      const badges=el('div',{class:'row',style:'gap:6px;margin-top:3px'});
-      badges.append(d.active?el('span',{class:'badge on'},el('i',{class:'dot'}),'Активно'):el('span',{class:'badge off'},el('i',{class:'dot'}),'Неактивно'));
-      if(!d.paired)badges.append(el('span',{class:'badge off'},'Не привязано'));
-      else if(d.online)badges.append(el('span',{class:'badge run'},'📶 На связи'));
-      const sw=swWrap(asw);
-      sw.onclick=(e)=>e.stopPropagation();
-      sw.addEventListener('pointerdown',(e)=>e.stopPropagation());
-      const row=el('div',{class:'devrow'},
-        el('div',{class:'grow'},el('div',{class:'nm ellipsis'},d.name),badges),
-        sw,el('span',{class:'arw muted',textContent:'›'}));
-      row.onclick=()=>go('device',{id:d.id});
-      list.append(row);
-    });
+    s.devices.forEach(d=>list.append(deviceRow(d)));
     c.append(list);
   }
 }
@@ -852,7 +933,7 @@ function renderSchedule(c){
   const sch=Object.assign({intervalSec:15,windows:[],repeatDaily:false,startAtMillis:0,starts:[]},STATE.schedule||{});
   c.append(el('div',{class:'screen-title'},'Настройка интервалов'));
   c.append(el('div',{class:'small muted',style:'margin:-8px 2px 4px'},'Эти настройки применяются ко всем вашим устройствам.'));
-  c.append(el('div',{class:'small',style:'margin:0 2px 12px;color:var(--accent);font-weight:600'},'🕒 Время указывается по Москве (МСК, UTC+3).'));
+  c.append(el('div',{class:'row',style:'gap:6px;margin:0 2px 12px;color:var(--accent);font-weight:600'},ic('clock',{size:16}),el('span',{class:'small'},'Время указывается по Москве (МСК, UTC+3).')));
 
   const interval=el('input',{type:'number',min:'1',value:sch.intervalSec});
   const chips=el('div',{class:'row',style:'gap:8px;margin-top:8px'});
@@ -901,7 +982,7 @@ function renderSchedule(c){
   save.onclick=async()=>{
     const windows=[...winList.querySelectorAll('.winblock')].map(r=>r._get());
     const starts=[...startsList.querySelectorAll('.winblock')].map(r=>r._getBurst());
-    // No date — windows/starts are pure time-of-day and recur by the clock.
+    // No date - windows/starts are pure time-of-day and recur by the clock.
     const schedule={intervalSec:Math.max(1,parseInt(interval.value,10)||15),windows,starts,repeatDaily:repeat.checked,startAtMillis:0};
     save.disabled=true;save.textContent='Сохранение…';
     const {code,data}=await api('POST','/api/mini/schedule',{schedule});
@@ -912,11 +993,11 @@ function renderSchedule(c){
   c.append(el('div',{class:'card'},
     el('label',{class:'field'},'Интервал отправки (секунды)'),interval,chips,
     el('label',{class:'field'},'Промежутки отправки (расписание)'),
-    el('div',{class:'tiny muted'},'Время суток (по МСК), когда идёт отправка — например 16:00:00–16:01:00. Дата не важна: как только на часах наступает промежуток, система отрабатывает. Вне промежутков — пауза. Можно добавить несколько.'),
+    el('div',{class:'tiny muted'},'Время суток (по МСК), когда идёт отправка - например 16:00:00-16:01:00. Дата не важна: как только на часах наступает промежуток, система отрабатывает. Вне промежутков - пауза. Можно добавить несколько.'),
     winList,
     el('button',{class:'btn sec small',textContent:'＋ Промежуток',style:'margin-top:8px',onclick:()=>addWinRow(null)}),
     el('label',{class:'field'},'Залпы по времени'),
-    el('div',{class:'tiny muted'},'В указанное время (по МСК) устройство выпускает залп: заданное число СМС подряд с интервалом в мс. Пример: 12:59:00 · 10 СМС · 500 мс — ровно в 12:59:00 уйдут 10 СМС раз в полсекунды. Можно добавить несколько времён.'),
+    el('div',{class:'tiny muted'},'В указанное время (по МСК) устройство выпускает залп: заданное число СМС подряд с интервалом в мс. Пример: 12:59:00 · 10 СМС · 500 мс - ровно в 12:59:00 уйдут 10 СМС раз в полсекунды. Можно добавить несколько времён.'),
     startsList,
     el('button',{class:'btn sec small',textContent:'＋ Добавить залп',style:'margin-top:8px',onclick:()=>addStartRow(null)}),
     el('div',{class:'row between',style:'margin-top:16px'},el('span',{},'Повторять каждый день'),swWrap(repeat)),
@@ -952,7 +1033,7 @@ function renderEmployees(c){
           if(code===200){STATE=data.state;render();toast('Код отменён');}else toast('Ошибка');
         }})));
     });
-    box.append(el('div',{class:'tiny muted',style:'margin-top:8px'},'Передайте код сотруднику — он вводит его вместо токена. Код одноразовый, действует 7 дней.'));
+    box.append(el('div',{class:'tiny muted',style:'margin-top:8px'},'Передайте код сотруднику - он вводит его вместо токена. Код одноразовый, действует 7 дней.'));
     c.append(box);
   }
 
@@ -963,7 +1044,7 @@ function renderEmployees(c){
   if(emps.length===0) box.append(el('div',{class:'small muted',style:'margin-top:8px'},'Пока нет. Добавьте по кнопке выше.'));
   emps.forEach(e=>{
     box.append(el('div',{class:'row between',style:'margin-top:10px'},
-      el('div',{},el('div',{},'👤 '+(e.name||('ID '+e.telegramId))),el('div',{class:'tiny muted'},'Telegram ID: '+e.telegramId)),
+      el('div',{},el('div',{class:'row',style:'gap:6px'},ic('users',{size:15}),el('span',{},(e.name||('ID '+e.telegramId)))),el('div',{class:'tiny muted'},'Telegram ID: '+e.telegramId)),
       el('button',{class:'btn danger small',textContent:'Убрать',onclick:()=>confirmAction('Убрать сотрудника?',async()=>{
         const {code,data}=await api('DELETE','/api/mini/employee/'+encodeURIComponent(e.telegramId));
         if(code===200){STATE=data.state;render();toast('Убран');}else toast('Ошибка');
@@ -994,7 +1075,7 @@ function wikiSection(sec,defaultOpen){
   const body=el('div',{class:'wikibody'},bodyIn);
   const chev=el('span',{class:'wikichev'},'⌄');
   const head=el('div',{class:'wikihead'},
-    el('div',{class:'wikiic',style:`background:${sec.color}22;color:${sec.color}`},sec.icon),
+    el('div',{class:'wikiic',style:`background:${sec.color}22;color:${sec.color}`},ic(sec.icon,{size:18})),
     el('div',{class:'grow'},el('div',{class:'wikititle'},sec.title),el('div',{class:'wikisub'},sec.sub)),
     chev);
   const wrap=el('div',{class:'wikisec',style:`border-left-color:${sec.color}`},head,body);
@@ -1007,17 +1088,80 @@ function wikiSection(sec,defaultOpen){
   return wrap;
 }
 const WIKI_SECTIONS=[
-  {icon:'▶️',color:'#2f7ae5',title:'«Начать немедленную работу со всех устройств»',
-   sub:'Главный тумблер запуска.',
+  {icon:'force',color:'#7c5cff',title:'Метод Форс',
+   sub:'Автоматическая отработка платежа прямо в приложении.',
    body:(c)=>[
-     wikiP('Как только вы переводите ползунок в активное положение, в ту же секунду начинается отправка SMS со всех ваших устройств со статусом «Активно» (зелёный ползунок на устройстве). Отправка идёт с тем интервалом, который задан в «Настройке интервалов».'),
+     wikiP('«Метод Форс» - это когда телефон сам, без вашего участия, открывает приложение банка, проходит все шаги перевода по заданным Номеру и Сумме и в нужный момент нажимает «Отправить». Всё по московскому времени, точно до секунды, даже если часы на телефоне сбиты (время сверяется с сервером).'),
      wikiList([
-       'Устройства со статусом «Неактивно» (белый ползунок) в запуске не участвуют.',
-       'Задержки нет: сервер будит устройства в момент нажатия.',
-       'Чтобы остановить, просто выключите тумблер.',
+       'Функцию включает администратор для вашего токена.',
+       'На устройстве должно быть включено приложение и разрешена «Специальная возможность».',
+       'Экран телефона должен быть включён - приложение работает по тому, что видит на экране.',
+       'Результат каждой отработки приходит в бота.',
+     ],c),
+     wikiP('Открыть раздел можно с главного экрана - плитка «Метод Форс».'),
+   ]},
+  {icon:'clock',color:'#4f8ef7',title:'Время нажатия «Отправить»',
+   sub:'Вы сами задаёте, в какую секунду часа жать «Отправить».',
+   body:(c)=>[
+     wikiP('В разделе «Метод Форс» есть карточка «Время нажатия «Отправить»». Здесь вы выбираете минуту и секунду часа, когда приложение нажмёт кнопку. Подготовка (открытие приложения и заполнение) начинается автоматически за 4 минуты до этого момента.'),
+     wikiP('Пример: если поставить 59:57, то подготовка начнётся в 55:57, а «Отправить» нажмётся ровно в 59:57.'),
+   ]},
+  {icon:'shield',color:'#12a58a',title:'Работать по методу системы',
+   sub:'Использовать общее время, заданное администратором.',
+   body:(c)=>[
+     wikiP('Переключатель «Работать по методу системы» в карточке времени. Когда он включён, ваше личное время не применяется - вместо него действует общее время (или несколько окон), которое настраивает администратор. Пока переключатель включён, своё время менять нельзя.'),
+     wikiP('Выключите переключатель - и снова работает ваше собственное время.'),
+   ]},
+  {icon:'clock',color:'#2f7ae5',title:'Несколько окон (метод системы)',
+   sub:'Приложение может отрабатывать в нескольких моментах за час.',
+   body:(c)=>[
+     wikiP('Администратор может задать не одно, а несколько «окон» - моментов, когда нажимать «Отправить». Тогда у всех, кто работает по методу системы, приложение готовится и жмёт «Отправить» в каждом окне по очереди. Окна ставятся с запасом друг от друга, потому что одно устройство выполняет один цикл за раз.'),
+   ]},
+  {icon:'sms',color:'#0a9d86',title:'СМС-залп и «Отключить смс-метод»',
+   sub:'Рассылка SMS идёт отдельно от нажатия «Отправить».',
+   body:(c)=>[
+     wikiP('Помимо нажатия «Отправить», раз в час устройство отправляет короткую серию SMS («залп») по своему расписанию. Это отдельный механизм, он не зависит от количества окон.'),
+     wikiP('Если SMS вам не нужны, включите переключатель «Отключить смс-метод» в разделе «Метод Форс». Тогда у вас останется только работа через приложение, а SMS отправляться не будут. Это работает независимо: даже если включён «метод системы», SMS всё равно можно отключить.'),
+   ]},
+  {icon:'check',color:'#28a745',title:'Автоматическое подтверждение',
+   sub:'Отвечать «Ок» на «символ» автоматически или вручную.',
+   body:(c)=>[
+     wikiP('Когда включено (по умолчанию), устройство само отвечает «Ок» на запрос кода («символ»), и платёж завершается автоматически.'),
+     wikiP('Если выключить, устройство «Ок» не отправляет - вместо этого вам придёт в бота сообщение «Подтвердите платеж на устройстве …» с кнопкой. Платёж завершится только после вашего подтверждения. Так вы контролируете каждый перевод вручную.'),
+   ]},
+  {icon:'flask',color:'#17b3a3',title:'Тест Метод Форс',
+   sub:'Безопасная проверка всего сценария.',
+   body:(c)=>[
+     wikiP('Кнопка «Проверить Метод Форс (тест)» на экране устройства запускает весь сценарий прямо сейчас. Это удобно, чтобы убедиться, что приложение проходит все шаги.'),
+     wikiP('На время теста автоподтверждение автоматически выключается - поэтому реальный платёж не уйдёт, даже если появится окно подтверждения. После успешного теста автоподтверждение снова включается само (если оно было включено до теста; если вы держали его выключенным - оно таким и останется). Результат теста приходит в бота.'),
+   ]},
+  {icon:'bell',color:'#e5a300',title:'Оповещения от шлюза',
+   sub:'Важные сообщения о платеже приходят в бота.',
+   body:(c)=>[
+     wikiP('Если от банка/шлюза приходит одно из важных сообщений, вам сразу приходит уведомление в бота с названием устройства:'),
+     wikiList([
+       '«Операция отклонена» - реквизит отклонён шлюзом, его нужно заменить;',
+       '«…ещё раз позднее» - оплата не прошла, возможно дело в реквизите;',
+       '«…паспортные…» - экстренная информация.',
      ],c),
    ]},
-  {icon:'⏱',color:'#6a5cff',title:'«Настройка интервалов»',
+  {icon:'power',color:'#0aa06e',title:'Экран не гаснет',
+   sub:'Устройство не блокируется во время работы.',
+   body:(c)=>[
+     wikiP('Пока устройство в работе, приложение удерживает экран включённым, чтобы телефон не заблокировался (обычная блокировка через несколько минут ломала бы работу). Держите устройство на зарядке - экран будет гореть постоянно.'),
+   ]},
+  {icon:'shield',color:'#e5484d',title:'Разрешения',
+   sub:'Что нужно включить на телефоне.',
+   body:(c)=>[
+     wikiP('Если чего-то не хватает, приложение само покажет окно «У вас не включено…» со списком. Для полной работы нужны:'),
+     wikiList([
+       'Специальная возможность (для Метод Форс);',
+       'Отправка SMS;',
+       'Уведомления;',
+       'Отключение экономии батареи.',
+     ],c),
+   ]},
+  {icon:'gear',color:'#6a5cff',title:'«Настройка интервалов»',
    sub:'Общие правила работы, применяются сразу ко всем вашим устройствам.',
    body:(c)=>[
      wikiStep(1,'Интервал отправки.','Пауза между попытками отправить SMS. Например, интервал 15 секунд означает, что устройство пробует отправлять раз в 15 секунд.',c),
@@ -1029,7 +1173,7 @@ const WIKI_SECTIONS=[
          wikiP('Времён можно добавить сколько нужно, в каждое сработает свой залп. Отсчёт идёт по часам самого устройства, поэтому в нужную секунду вы попадаете точно. Это то, что нужно, когда важно выстрелить ровно в момент открытия окна.'))),
      wikiStep(4,'Повторять каждый день.','Выставленный сценарий (промежутки и залпы) будет автоматически повторяться каждый день, без повторной настройки.',c),
    ]},
-  {icon:'👥',color:'#28a745',title:'«Сотрудники»',
+  {icon:'users',color:'#28a745',title:'«Сотрудники»',
    sub:'Совместная работа под одним токеном.',
    body:(c)=>[
      wikiP('Вы можете добавить сотрудника в свой личный кабинет, и ему откроются все функции работы по вашему токену: устройства, платежи, расписание, запуск, отчёты. Единственное ограничение: сотрудник не может добавлять других сотрудников, это доступно только вам как владельцу.'),
@@ -1039,7 +1183,7 @@ const WIKI_SECTIONS=[
        'Список сотрудников виден вам, любого можно убрать.',
      ],c),
    ]},
-  {icon:'🤖',color:'#17b3a3',title:'Отчёты в боте и кнопка «Доработать»',
+  {icon:'chart',color:'#17b3a3',title:'Отчёты в боте и кнопка «Доработать»',
    sub:'Итог работы приходит вам в Telegram-бота.',
    body:(c)=>[
      wikiP('Когда работа завершается (все устройства отработали или вы выключили общий тумблер), бот присылает отчёт по каждому устройству:'),
@@ -1050,7 +1194,7 @@ const WIKI_SECTIONS=[
      ],c),
      wikiP('Под отчётом есть кнопка «Доработать». Нажатие убирает уже выполненные платежи и оставляет только неотработанные, чтобы можно было быстро запустить повтор именно по тому, что не прошло, не собирая всё заново. После этого останется лишь задать запуск (расписание или общий тумблер).'),
    ]},
-  {icon:'🔴',color:'#e5484d',title:'Определение «плохого» реквизита',
+  {icon:'warn',color:'#e5484d',title:'Определение «плохого» реквизита',
    sub:'Система сама следит за качеством ваших реквизитов.',
    body:(c)=>[
      wikiP('Если реквизит, который вы указали, оказывается «плохим» (платёжный шлюз его отклоняет), вам сразу приходит уведомление в Telegram-бота с просьбой заменить этот реквизит. В уведомлении указано, какой именно реквизит и на каком устройстве, чтобы вы быстро нашли его и поменяли. Так вы не тратите время на реквизит, который всё равно не сработает.'),
@@ -1058,7 +1202,7 @@ const WIKI_SECTIONS=[
 ];
 function renderWiki(c){
   c.append(el('div',{class:'screen-title'},'Wiki'));
-  c.append(el('div',{class:'small muted',style:'margin:-8px 2px 14px'},'Как пользоваться ALFA SMS — коротко о каждой функции.'));
+  c.append(el('div',{class:'small muted',style:'margin:-8px 2px 14px'},'Как пользоваться ALFA SMS - коротко о каждой функции.'));
   WIKI_SECTIONS.forEach((sec,i)=>c.append(wikiSection(sec,i===0)));
 }
 
@@ -1070,7 +1214,7 @@ function showInvite(code){
   const node=el('div',{},
     el('b',{},'Код сотрудника'),
     el('div',{class:'center',style:'margin:12px 0'},el('span',{class:'code',style:'font-size:24px'},code)),
-    el('div',{class:'small muted'},'Передайте этот код сотруднику. Пусть введёт его вместо токена в этом мини‑аппе — и получит доступ. Код одноразовый, действует 7 дней.'),
+    el('div',{class:'small muted'},'Передайте этот код сотруднику. Пусть введёт его вместо токена в этом мини‑аппе - и получит доступ. Код одноразовый, действует 7 дней.'),
     el('div',{style:'height:12px'}), copyBtn,
     el('button',{class:'btn ghost',textContent:'Готово',style:'margin-top:6px',onclick:()=>bd.remove()}));
   const bd=modal(node);
@@ -1093,18 +1237,23 @@ function renderDevice(c){
       el('div',{class:'small muted'},d.paired?(d.online?'На связи':'Оффлайн'):'Не привязано')),
     swWrap(asw))));
 
-  // Метод Форс: on-demand test — the phone dry-runs the Beeline flow now and
-  // reports what it sees to the bot (does NOT press «Отправить»).
+  // Метод Форс: on-demand test. The server turns «Автоподтверждение» off for the
+  // test so a real payment can't slip through, and turns it back on afterwards.
   if(STATE.metodForsEnabled){
-    const tb=el('button',{class:'btn sec',style:'margin-bottom:6px',textContent:'🔬 Проверить Метод Форс (тест)',disabled:!d.paired});
-    tb.onclick=async()=>{
+    const setLabel=()=>{ tb.innerHTML=''; tb.append(ic('flask',{size:18}),el('span',{style:'margin-left:6px'},'Проверить Метод Форс (тест)')); };
+    const tb=el('button',{class:'btn sec',style:'margin-bottom:6px',disabled:!d.paired});
+    setLabel();
+    const runTest=async()=>{
       tb.disabled=true;tb.textContent='Запуск теста…';
       const {code}=await api('POST',`/api/mini/device/${d.id}/mftest`,{});
-      tb.disabled=false;tb.textContent='🔬 Проверить Метод Форс (тест)';
-      if(code===200)toast('Тест запущен — смотрите отчёт в боте');else toast('Ошибка');
+      tb.disabled=false;setLabel();
+      if(code===200)toast('Тест запущен - смотрите отчёт в боте');else toast('Ошибка');
+    };
+    tb.onclick=()=>{
+      confirmAction('На время теста автоподтверждение будет выключено - платёж точно не уйдёт, даже если появится окно подтверждения. Как только тест завершится успешно, автоподтверждение снова включится автоматически (если оно было включено). Запустить тест?', runTest, 'Запустить тест');
     };
     c.append(tb);
-    c.append(el('div',{class:'tiny muted',style:'margin:0 2px 12px'},'Телефон откроет Билайн, пройдёт по шагам и пришлёт в бота, что видит на экране. Кнопку «Отправить» НЕ нажимает.'));
+    c.append(el('div',{class:'tiny muted',style:'margin:0 2px 12px'},'Телефон откроет Билайн, пройдёт по шагам и пришлёт результат в бота. Реальный платёж не отправляется.'));
   }
 
   if(!d.paired) c.append(pairingBlock(d));
@@ -1118,8 +1267,8 @@ function renderDevice(c){
     del.onclick=(e)=>{ e.stopPropagation(); deletePaymentFlow(d,i); };
     block.append(
       el('div',{class:'row between'},el('div',{class:'pn'},p.name||('Платеж '+(i+1))),del),
-      el('div',{class:'kv'},'Реквизиты: ',el('b',{},p.requisites||'—')),
-      el('div',{class:'kv'},'Сумма: ',el('b',{},p.amount||'—')),
+      el('div',{class:'kv'},'Реквизиты: ',el('b',{},p.requisites||'-')),
+      el('div',{class:'kv'},'Сумма: ',el('b',{},p.amount||'-')),
       el('div',{class:'kv'},p.multiple?`Количество платежей: `:'Один платёж',p.multiple?el('b',{},String(p.count)):null));
     block.onclick=()=>go('payment',{deviceId:d.id,index:i});
     box.append(block);
@@ -1170,7 +1319,7 @@ function renderPayment(c){
     const requisites=req.value.trim();
     const amount=amt.value.trim().replace(',', '.');
     if(!requisites){toast('Заполните реквизиты');req.focus();return;}
-    if(!/^\d+(\.\d+)?$/.test(amount)||parseFloat(amount)<=0){toast('Сумма — только положительное число');amt.focus();return;}
+    if(!/^\d+(\.\d+)?$/.test(amount)||parseFloat(amount)<=0){toast('Сумма - только положительное число');amt.focus();return;}
     const block={
       id:existing?existing.id:undefined,
       name:existing?existing.name:('Платеж '+((d.payments||[]).length+1)),
@@ -1183,7 +1332,7 @@ function renderPayment(c){
     const {code,data}=await api('POST',`/api/mini/device/${d.id}/payments`,{payments});
     save.disabled=false;save.textContent='Сохранить';
     if(code===200){STATE=data.state;toast('Сохранено');back();}
-    else if(data.error==='invalid_amount')toast('Сумма — только число');
+    else if(data.error==='invalid_amount')toast('Сумма - только число');
     else if(data.error==='empty_requisites')toast('Заполните реквизиты');
     else toast('Ошибка сохранения');
   };
@@ -1193,7 +1342,7 @@ function renderPayment(c){
     el('label',{class:'field'},'Сумма'),amt,
     el('div',{class:'row between',style:'margin-top:16px'},
       el('div',{class:'grow'},el('div',{},'Несколько платежей на этот реквизит с той же суммой')),swWrap(multi)),
-    el('div',{class:'tiny muted',style:'margin-top:6px'},'Если сумма или реквизит отличается — добавьте ещё одну отправку.'),
+    el('div',{class:'tiny muted',style:'margin-top:6px'},'Если сумма или реквизит отличается - добавьте ещё одну отправку.'),
     countWrap, save);
   c.append(card);
   syncCount();
@@ -1448,9 +1597,9 @@ function adminTokenCard(t){
 // ---------- Flows ----------
 function modal(node){const bd=el('div',{class:'backdrop'});bd.onclick=(e)=>{if(e.target===bd)bd.remove();};
   const mm=el('div',{class:'modal'});mm.append(node);bd.append(mm);document.body.append(bd);return bd;}
-function confirmAction(text,onYes){
+function confirmAction(text,onYes,yesLabel){
   if(TG&&TG.showConfirm){TG.showConfirm(text,(ok)=>{if(ok)onYes();});return;}
-  const yes=el('button',{class:'btn danger',textContent:'Да'});
+  const yes=el('button',{class:'btn danger',textContent:yesLabel||'Да'});
   const no=el('button',{class:'btn ghost',textContent:'Отмена',style:'margin-top:6px'});
   const node=el('div',{},el('b',{},'Подтверждение'),el('div',{class:'small muted',style:'margin:8px 0 14px'},text),yes,no);
   const bd=modal(node);

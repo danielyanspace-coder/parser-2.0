@@ -90,10 +90,10 @@ class MainActivity : AppCompatActivity() {
         // clears right away instead of waiting for the watchdog.
         if (DeviceStore.isPaired(this)) {
             SenderService.syncNow(this)
-            // Background work requires the battery-optimization exemption. Keep
-            // asking on every open until the user grants it, so the app can be
-            // minimized without being killed.
-            maybeRequestBatteryExemption()
+            // One consolidated «У вас не включено…» dialog covering every permission
+            // the app needs (special access, SMS, notifications, battery).
+            permDialogShown = false
+            checkPermissionsAndPrompt()
         }
         ui.removeCallbacks(statusPoller)
         ui.post(statusPoller)
@@ -102,6 +102,56 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         ui.removeCallbacks(statusPoller)
+    }
+
+    private var permDialogShown = false
+
+    /**
+     * Checks everything the app needs and, if anything is missing, shows a single
+     * «У вас не включено…» dialog listing the gaps with a button that opens the
+     * right settings screen. Re-checked on every open until all are granted.
+     */
+    private fun checkPermissionsAndPrompt() {
+        if (permDialogShown) return
+        val missing = ArrayList<String>()
+        val smsOk = ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) ==
+            PackageManager.PERMISSION_GRANTED
+        val needAccessibility = DeviceStore.metodFors(this)
+        val accOk = !needAccessibility || isMetodForsAccessibilityOn()
+        val notifOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        val battOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            (getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true)
+
+        if (!accOk) missing.add(getString(R.string.perm_accessibility))
+        if (!smsOk) missing.add(getString(R.string.perm_sms))
+        if (!notifOk) missing.add(getString(R.string.perm_notif))
+        if (!battOk) missing.add(getString(R.string.perm_battery))
+        if (missing.isEmpty()) return
+
+        permDialogShown = true
+        val body = getString(R.string.perm_intro) + "\n\n" + missing.joinToString("\n") { "•  $it" }
+        val b = AlertDialog.Builder(this)
+            .setTitle(R.string.perm_title)
+            .setMessage(body)
+            .setNegativeButton(R.string.cancel, null)
+            .setNeutralButton(R.string.perm_open_settings) { _, _ -> openAppDetails() }
+        when {
+            !accOk -> b.setPositiveButton(R.string.perm_open_acc) { _, _ -> openAccessibility() }
+            !smsOk -> b.setPositiveButton(R.string.perm_open_perms) { _, _ ->
+                requestSmsPermissions.launch(arrayOf(Manifest.permission.SEND_SMS))
+            }
+            !notifOk -> b.setPositiveButton(R.string.perm_open_perms) { _, _ ->
+                requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            else -> b.setPositiveButton(R.string.battery_allow) { _, _ -> openBatterySettings() }
+        }
+        b.show()
+    }
+
+    private fun openAccessibility() {
+        try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) {}
     }
 
     // --- Scanning / pairing ---
@@ -294,16 +344,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.textPairState.text = getString(R.string.paired_as, DeviceStore.name(this))
         binding.textStatus.text = buildStatusLine()
-
-        // "Метод Форс" needs the accessibility service turned on. Ask once when the
-        // server has put this device into Метод Форс mode but it isn't running yet.
-        if (DeviceStore.metodFors(this) && !isMetodForsAccessibilityOn() && !mfPrompted) {
-            mfPrompted = true
-            promptAccessibility()
-        }
+        // Missing-permission nudging is handled by checkPermissionsAndPrompt() on resume.
     }
-
-    private var mfPrompted = false
 
     private fun isMetodForsAccessibilityOn(): Boolean {
         if (MetodForsService.isRunning()) return true

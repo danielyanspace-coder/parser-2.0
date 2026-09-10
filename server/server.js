@@ -64,6 +64,9 @@ const MF_RULE_FIRE_MS = parseInt(process.env.MF_RULE_FIRE_MS || '0', 10);
 const MF_RULE_PREP_LEAD_SEC = parseInt(process.env.MF_RULE_PREP_LEAD_SEC || '240', 10);
 // Max number of «Повторить» presses after «Отправить» (0 = unlimited).
 const MF_REPEAT_MAX = parseInt(process.env.MF_REPEAT_MAX || '10', 10);
+// Safety: if a Метод-Форс test never reports back, restore «Автоподтверждение»
+// (turned off for the test) after this long anyway.
+const MF_TEST_AC_TIMEOUT_MS = parseInt(process.env.MF_TEST_AC_TIMEOUT_MS || String(6 * 60 * 1000), 10);
 // Beeline app package (queried + driven by the accessibility service).
 const MF_BEELINE_PACKAGE = process.env.MF_BEELINE_PACKAGE || 'ru.beeline.services';
 // Hourly SMS burst for «Метод Форс» tokens: every hour each active device sends
@@ -101,6 +104,16 @@ function mfSystemWindows() {
 // into «Метод системы», otherwise its own single time.
 function tokenWindows(t) {
   return (t && t.mfSystemMode) ? mfSystemWindows() : [mfSendSec(t)];
+}
+// Turns «Автоподтверждение» back on after a test, but only if the test turned it
+// off (a user who kept it off is never overridden). Returns true if it restored.
+function restoreTestAutoConfirm(t) {
+  if (!t || !t.acTestRestore) return false;
+  t.autoConfirm = true;
+  t.acTestRestore = false;
+  t.acTestUntil = 0;
+  bumpToken(t);
+  return true;
 }
 function metodForsConfig(t) {
   return {
@@ -1637,10 +1650,19 @@ const server = http.createServer(async (req, res) => {
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
         }
-        // One-shot «Метод Форс» test: the device dry-runs the Beeline flow now and
-        // reports what it sees to the bot (without pressing «Отправить»).
+        // One-shot «Метод Форс» test. To avoid a real payment slipping through, we
+        // turn OFF «Автоматическое подтверждение» for the duration of the test and
+        // remember to restore it — but only if it was ON to begin with, so a user
+        // who deliberately keeps it off is never overridden. It's restored when the
+        // device reports the test result, or after MF_TEST_AC_TIMEOUT_MS as a safety.
         if (m === 'POST' && action === 'mftest') {
+          if (t.autoConfirm !== false) {
+            t.acTestRestore = true;
+            t.autoConfirm = false;
+          }
+          t.acTestUntil = now() + MF_TEST_AC_TIMEOUT_MS;
           d.mfTestReq = uuid();
+          bumpToken(t); // push the autoConfirm change to every device of the token
           bumpDevice(d);
           saveDb();
           return sendJson(res, 200, { device: deviceView(d), state: tokenStateView(t, resolveTelegramId(req)) });
@@ -1750,6 +1772,21 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
 
+      // Test finished (success or fail) → restore «Автоподтверждение» if the test
+      // turned it off, then relay the result to the owner + employees.
+      if (body.type === 'mftest_result' && t) {
+        const line = String(body.requisites || '').slice(0, 1000);
+        const restored = restoreTestAutoConfirm(t);
+        saveDbSoon();
+        const recips = [];
+        if (t.telegramId) recips.push(t.telegramId);
+        for (const emp of (t.employees || [])) if (emp && emp.telegramId) recips.push(emp.telegramId);
+        const tail = restored ? '\nАвтоподтверждение снова включено.' : '';
+        const msg = `🛠 <b>Метод Форс · тест</b>\nУстройство: <b>${eschtml(d.name)}</b>\n${eschtml(line)}${tail}`;
+        for (const chatId of recips) tgSend(chatId, msg);
+        return sendJson(res, 200, { ok: true });
+      }
+
       // "Метод Форс": a device finished one automated Beeline transfer (caught
       // «символ», answered «Ок», got «успешно»). Log it like a normal successful
       // payment AND send a dedicated report to the owner. Does not stop or gate
@@ -1818,6 +1855,8 @@ const server = http.createServer(async (req, res) => {
       if (!d || !d.secret || !safeEqual(d.secret, secret)) return sendJson(res, 403, { error: 'unauthorized' });
       const t = db.tokens.find((x) => x.id === d.tokenId);
       d.lastSeen = now();
+      // Safety net: restore «Автоподтверждение» if a test left it off past the timeout.
+      if (t && t.acTestRestore && t.acTestUntil && now() > t.acTestUntil) restoreTestAutoConfirm(t);
       if (body.status && typeof body.status === 'object') {
         d.status = {
           running: Boolean(body.status.running),

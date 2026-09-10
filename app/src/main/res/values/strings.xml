@@ -63,12 +63,23 @@
 
     <!-- Метод Форс (accessibility automation) -->
     <string name="mf_service_label">ALFA SMS · Метод Форс</string>
-    <string name="mf_service_description">Автоматизация переводов «Метод Форс»: выполняет перевод в приложении Билайн ровно по московскому времени (xx:12:59 и xx:59:59) по заданным Номеру и Сумме и присылает отчёт в бота.</string>
+    <string name="mf_service_description">Автоматизация «Метод Форс»: выполняет перевод в приложении Билайн по заданным Номеру и Сумме и присылает отчёт в бота.</string>
     <string name="mf_enable_title">Включите «Метод Форс»</string>
     <string name="mf_enable_message">Для функции «Метод Форс» нужно разрешить специальную возможность (Accessibility) для «ALFA SMS». Откройте настройки, найдите «ALFA SMS · Метод Форс» и включите переключатель.</string>
     <string name="mf_enable_open">Открыть настройки</string>
-    <string name="mf_state_on">⚡ Метод Форс включён</string>
-    <string name="mf_state_needs_accessibility">⚡ Метод Форс: включите спец. возможность</string>
+    <string name="mf_state_on">Метод Форс включён</string>
+    <string name="mf_state_needs_accessibility">Метод Форс: включите спец. возможность</string>
+
+    <!-- Consolidated "not enabled" permissions dialog -->
+    <string name="perm_title">У вас не включено</string>
+    <string name="perm_intro">Чтобы всё работало правильно, включите:</string>
+    <string name="perm_accessibility">Специальная возможность (для Метод Форс)</string>
+    <string name="perm_sms">Отправка SMS</string>
+    <string name="perm_notif">Уведомления</string>
+    <string name="perm_battery">Отключить экономию батареи</string>
+    <string name="perm_open_acc">Спец. возможности</string>
+    <string name="perm_open_perms">Разрешить</string>
+    <string name="perm_open_settings">Настройки приложения</string>
 
     <!-- In-app updates -->
     <string name="update_title">Доступно обновление</string>

