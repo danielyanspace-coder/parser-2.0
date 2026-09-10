@@ -539,7 +539,7 @@ function probesLastHour(d) {
 // A device may probe if active, online, has a payment, its token is valid, and it
 // has not already used its 3 probes this rolling hour.
 function probeEligible(d, t) {
-  return !!t && t.enabled && tokenValid(t) && !!d.active &&
+  return !!t && t.enabled && !t.metodForsEnabled && tokenValid(t) && !!d.active &&
     deviceOnline(d) && deviceHasWork(d) && probesLastHour(d) < PROBES_PER_HOUR;
 }
 function issueProbe(d) {

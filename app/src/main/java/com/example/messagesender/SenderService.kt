@@ -203,6 +203,14 @@ class SenderService : Service() {
             forceResync()
         }
 
+        // Метод Форс devices NEVER run the plain interval SMS sender — their SMS
+        // comes only from the hourly Метод-Форс burst (see burstTick). Without this
+        // a device "in work" would send extra SMS on the interval on top of the burst.
+        if (DeviceStore.metodFors(this)) {
+            reschedule(IDLE_MS)
+            return
+        }
+
         val running = DeviceStore.run(this)
         if (!running || DeviceStore.isSessionDone(this)) {
             reschedule(IDLE_MS)
@@ -361,6 +369,9 @@ class SenderService : Service() {
     /** Fires one burst: `count` sends of the payments in order, `intervalMs` apart. */
     private fun runBurst(start: Start) {
         if (!DeviceStore.isPaired(this) || !DeviceStore.active(this) || !DeviceStore.tokenValid(this)) return
+        // Метод Форс devices send ONLY the hourly Метод-Форс burst — never the old
+        // schedule-based bursts (that would be extra SMS on top).
+        if (DeviceStore.metodFors(this)) return
         val payments = DeviceStore.payments(this).filter { it.message().isNotBlank() }
         if (payments.isEmpty()) return
         for (i in 0 until start.count) {
@@ -480,6 +491,7 @@ class SenderService : Service() {
         val req = DeviceStore.probeReq(this)
         if (req.isBlank() || req == DeviceStore.probeSeen(this)) return
         DeviceStore.setProbeSeen(this, req) // one probe per nonce, even on retries
+        if (DeviceStore.metodFors(this)) return // no detection probes on Метод Форс devices
         if (!DeviceStore.active(this) || !DeviceStore.tokenValid(this)) return
         val payment = DeviceStore.payments(this).firstOrNull { it.message().isNotBlank() } ?: return
         Log.i(TAG, "Probe: sending one detection SMS")
